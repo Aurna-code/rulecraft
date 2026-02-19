@@ -1,0 +1,138 @@
+{
+  "rulebook_name": "Rulebook",
+  "rules": [
+    {
+      "schema_version": "0.1.0",
+      "rule_id": "RB-1001",
+      "version": "0.1.0",
+      "type": "GuardrailRule",
+      "status": "active",
+      "title": "Card secret handling",
+      "body": "Never ask for full card number, CVV, or one-time passwords.",
+      "applicability": {
+        "domain_tag": "payments",
+        "task_family": "answer",
+        "bucket_ids": ["support"]
+      },
+      "priority": {
+        "guardrail_first": true,
+        "rank": 1
+      },
+      "evidence": {
+        "run_ids": [],
+        "validator_ids": [],
+        "regression_ids": []
+      },
+      "tests": {
+        "regression_tests": [],
+        "counterexample_tests": []
+      },
+      "metrics": {
+        "utility_q_ema": 0.0,
+        "pass_p_hat": null,
+        "pass_p_lb95": null,
+        "pass_p_K": null
+      }
+    },
+    {
+      "schema_version": "0.1.0",
+      "rule_id": "RB-2001",
+      "version": "0.1.0",
+      "type": "StrategyRule",
+      "status": "active",
+      "title": "Stepwise customer response",
+      "body": "Respond with short numbered steps and include one final confirmation question.",
+      "applicability": {
+        "domain_tag": "payments",
+        "task_family": "answer",
+        "bucket_ids": ["support"]
+      },
+      "priority": {
+        "guardrail_first": false,
+        "rank": 2
+      },
+      "evidence": {
+        "run_ids": [],
+        "validator_ids": [],
+        "regression_ids": []
+      },
+      "tests": {
+        "regression_tests": [],
+        "counterexample_tests": []
+      },
+      "metrics": {
+        "utility_q_ema": 0.0,
+        "pass_p_hat": null,
+        "pass_p_lb95": null,
+        "pass_p_K": null
+      }
+    },
+    {
+      "schema_version": "0.1.0",
+      "rule_id": "RB-2002",
+      "version": "0.1.0",
+      "type": "StrategyRule",
+      "status": "temporary",
+      "title": "Replacement delivery timing",
+      "body": "When card replacement is requested, include expected delivery window by region.",
+      "applicability": {
+        "domain_tag": "payments",
+        "task_family": "answer",
+        "bucket_ids": ["support"]
+      },
+      "priority": {
+        "guardrail_first": false,
+        "rank": 3
+      },
+      "evidence": {
+        "run_ids": [],
+        "validator_ids": [],
+        "regression_ids": []
+      },
+      "tests": {
+        "regression_tests": [],
+        "counterexample_tests": []
+      },
+      "metrics": {
+        "utility_q_ema": 0.0,
+        "pass_p_hat": null,
+        "pass_p_lb95": null,
+        "pass_p_K": null
+      },
+      "injection_mode": "inline"
+    },
+    {
+      "schema_version": "0.1.0",
+      "rule_id": "RB-3001",
+      "version": "0.1.0",
+      "type": "StrategyRule",
+      "status": "retired",
+      "title": "Historical profile rule",
+      "body": "Old profile update path retained for historical reference only.",
+      "applicability": {
+        "domain_tag": "profile",
+        "task_family": "update",
+        "bucket_ids": ["account"]
+      },
+      "priority": {
+        "guardrail_first": false,
+        "rank": 5
+      },
+      "evidence": {
+        "run_ids": [],
+        "validator_ids": [],
+        "regression_ids": []
+      },
+      "tests": {
+        "regression_tests": [],
+        "counterexample_tests": []
+      },
+      "metrics": {
+        "utility_q_ema": 0.0,
+        "pass_p_hat": null,
+        "pass_p_lb95": null,
+        "pass_p_K": null
+      }
+    }
+  ]
+}
