@@ -688,12 +688,16 @@ RunLog:
     efficiency: float|null
     infomech: InfoMechanicsLedger|null   # MAY (Infomechanics: 정보이득/비용 + 지형 프록시)
     budget_tier: "hot"|"probe"|"full"|null      # MAY (BudgetController가 선택한 티어)
+    should_escalate: bool|null                 # MAY
+    repair_attempted: bool|null                # MAY
+    repair_succeeded: bool|null                # MAY
+    adapter_calls: int|null                    # MAY
     budget_caps:                               # MAY (적용된 상한; 비교/회귀용)
       max_tokens_total: int|null               # MAY (tokens_in+out 총상한; 추정치 허용)
       max_tool_calls: int|null                 # MAY
       max_latency_ms: int|null                 # MAY
     early_exit: bool|null                      # MAY (중간 티어에서 종료했는지)
-    exit_stage: string|null                    # MAY (예: "l1", "sot", "probe", "full", "compose")
+    exit_stage: string|null                    # MAY (예: "l1", "l1_repair")
     exit_reason: string|null                   # MAY (예: "confident_pass", "deadzone", "budget_cap", "clarify")
 
   applied_rules:              # MUST (RuleSelectResponse의 일부 미러)

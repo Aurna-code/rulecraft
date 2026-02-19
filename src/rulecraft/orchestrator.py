@@ -61,39 +61,40 @@ class Orchestrator:
 
         first_output, first_meta = adapter.generate(messages)
         first_validation = validate_l1(first_output, constraints)
+        adapter_calls = 1
 
         final_output = first_output
-        final_meta = first_meta
         final_validation = first_validation
         repair_attempted = False
-        repair_meta: dict[str, Any] | None = None
 
         violated_constraints = set(first_validation.violated_constraints or [])
         if constraints.get("json_only") is True and "FORMAT:JSON_ONLY" in violated_constraints:
             repair_attempted = True
             repair_messages = build_json_repair_messages(messages, first_output, constraints)
             repaired_output, repair_meta = adapter.generate(repair_messages)
+            adapter_calls += 1
             final_output = repaired_output
-            final_meta = repair_meta
             final_validation = validate_l1(repaired_output, constraints)
+        else:
+            repair_meta = None
 
         early_exit = final_validation.verdict == "PASS" and final_validation.outcome == "OK"
         should_escalate = self.budget_controller.should_escalate(final_validation, context)
         repair_succeeded = repair_attempted and early_exit
 
-        latency_ms = final_meta.get("latency_ms")
-        tokens_in = final_meta.get("tokens_in")
-        tokens_out = final_meta.get("tokens_out")
+        call_metas = [first_meta]
         if repair_meta is not None:
-            first_latency_ms = first_meta.get("latency_ms")
-            first_tokens_in = first_meta.get("tokens_in")
-            first_tokens_out = first_meta.get("tokens_out")
-            if isinstance(latency_ms, int) and isinstance(first_latency_ms, int):
-                latency_ms += first_latency_ms
-            if isinstance(tokens_in, int) and isinstance(first_tokens_in, int):
-                tokens_in += first_tokens_in
-            if isinstance(tokens_out, int) and isinstance(first_tokens_out, int):
-                tokens_out += first_tokens_out
+            call_metas.append(repair_meta)
+
+        latency_values = [value for value in (meta.get("latency_ms") for meta in call_metas) if isinstance(value, int)]
+        tokens_in_values = [value for value in (meta.get("tokens_in") for meta in call_metas) if isinstance(value, int)]
+        tokens_out_values = [value for value in (meta.get("tokens_out") for meta in call_metas) if isinstance(value, int)]
+        tool_call_values = [value for value in (meta.get("tool_calls") for meta in call_metas) if isinstance(value, int)]
+
+        latency_ms = sum(latency_values) if latency_values else None
+        tokens_in = sum(tokens_in_values) if tokens_in_values else None
+        tokens_out = sum(tokens_out_values) if tokens_out_values else None
+        tool_calls = sum(tool_call_values) if tool_call_values else 0
 
         if early_exit:
             exit_reason = "repaired_pass" if repair_attempted else "confirmed_pass"
@@ -116,7 +117,7 @@ class Orchestrator:
             run={
                 "mode": "main",
                 "cfg": {
-                    "adapter_mode": final_meta.get("adapter_mode"),
+                    "adapter_mode": call_metas[-1].get("adapter_mode"),
                     "json_only": bool(constraints.get("json_only")),
                     "length_lte": constraints.get("length_lte"),
                     "repair_attempted": repair_attempted,
@@ -135,7 +136,7 @@ class Orchestrator:
                 "latency_ms": latency_ms,
                 "tokens_in": tokens_in,
                 "tokens_out": tokens_out,
-                "tool_calls": 0,
+                "tool_calls": tool_calls,
             },
             control_signals={
                 "budget_tier": self.budget_controller.tier,
@@ -143,7 +144,8 @@ class Orchestrator:
                 "early_exit": early_exit,
                 "repair_attempted": repair_attempted,
                 "repair_succeeded": repair_succeeded,
-                "exit_stage": "L1_REPAIR" if repair_attempted else "L1",
+                "adapter_calls": adapter_calls,
+                "exit_stage": "l1_repair" if repair_attempted else "l1",
                 "exit_reason": exit_reason,
             },
         )

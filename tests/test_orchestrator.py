@@ -67,6 +67,7 @@ class SequenceAdapter(BackendAdapter):
         self.outputs = outputs
         self.call_count = 0
         self.calls: list[list[dict[str, str]]] = []
+        self.call_metas: list[dict[str, Any]] = []
 
     def generate(self, messages: list[dict[str, Any]], **kwargs: Any) -> tuple[str, dict[str, Any]]:
         _ = kwargs
@@ -81,12 +82,14 @@ class SequenceAdapter(BackendAdapter):
 
         output = self.outputs[self.call_count]
         self.call_count += 1
-        return output, {
+        meta = {
             "latency_ms": 1,
             "tokens_in": max(sum(len(message["content"]) for message in normalized_messages) // 4, 1),
             "tokens_out": max(len(output) // 4, 1),
             "adapter_mode": "sequence",
         }
+        self.call_metas.append(meta)
+        return output, meta
 
 
 def test_orchestrator_hot_loop_json_ok(tmp_path: Path) -> None:
@@ -109,6 +112,8 @@ def test_orchestrator_hot_loop_json_ok(tmp_path: Path) -> None:
     assert runlog["validator"]["verdict"]
     assert runlog["validator"]["outcome"]
     assert runlog["control_signals"]["budget_tier"] == "hot"
+    assert runlog["control_signals"]["adapter_calls"] == 1
+    assert runlog["control_signals"]["exit_stage"] == "l1"
 
     lines = runlog_path.read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 1
@@ -159,10 +164,15 @@ def test_orchestrator_json_only_repair_success(tmp_path: Path) -> None:
     assert runlog["validator"]["outcome"] == "OK"
     assert runlog["control_signals"]["repair_attempted"] is True
     assert runlog["control_signals"]["repair_succeeded"] is True
-    assert runlog["control_signals"]["exit_stage"] == "L1_REPAIR"
+    assert runlog["control_signals"]["adapter_calls"] == 2
+    assert runlog["control_signals"]["exit_stage"] == "l1_repair"
     assert runlog["control_signals"]["exit_reason"] == "repaired_pass"
     assert runlog["control_signals"]["should_escalate"] is False
     assert runlog["run"]["cfg"]["repair_attempted"] is True
+    assert runlog["cost"]["latency_ms"] == sum(int(meta["latency_ms"]) for meta in adapter.call_metas)
+    assert runlog["cost"]["tokens_in"] == sum(int(meta["tokens_in"]) for meta in adapter.call_metas)
+    assert runlog["cost"]["tokens_out"] == sum(int(meta["tokens_out"]) for meta in adapter.call_metas)
+    assert runlog["cost"]["tool_calls"] == 0
 
 
 def test_orchestrator_json_only_repair_fail(tmp_path: Path) -> None:
@@ -186,7 +196,12 @@ def test_orchestrator_json_only_repair_fail(tmp_path: Path) -> None:
     assert runlog["validator"]["outcome"] == "UNKNOWN"
     assert runlog["control_signals"]["repair_attempted"] is True
     assert runlog["control_signals"]["repair_succeeded"] is False
-    assert runlog["control_signals"]["exit_stage"] == "L1_REPAIR"
+    assert runlog["control_signals"]["adapter_calls"] == 2
+    assert runlog["control_signals"]["exit_stage"] == "l1_repair"
     assert runlog["control_signals"]["exit_reason"] == "needs_escalation"
     assert runlog["control_signals"]["should_escalate"] is True
     assert runlog["run"]["cfg"]["repair_attempted"] is True
+    assert runlog["cost"]["latency_ms"] == sum(int(meta["latency_ms"]) for meta in adapter.call_metas)
+    assert runlog["cost"]["tokens_in"] == sum(int(meta["tokens_in"]) for meta in adapter.call_metas)
+    assert runlog["cost"]["tokens_out"] == sum(int(meta["tokens_out"]) for meta in adapter.call_metas)
+    assert runlog["cost"]["tool_calls"] == 0
