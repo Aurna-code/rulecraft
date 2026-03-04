@@ -20,9 +20,13 @@ def test_run_once_returns_minimal_eventlog() -> None:
     assert payload["x_ref"]
     assert "selected_rules" in payload
     assert isinstance(payload["selected_rules"], list)
-    assert payload["verdict"] == "PASS"
-    assert payload["outcome"] == "OK"
-    assert payload["cost"]["backend"] == "stub"
+    assert payload["verifier"]["verifier_id"] == "vf_l1_v1"
+    assert payload["verifier"]["verdict"] == "PASS"
+    assert payload["verifier"]["outcome"] == "OK"
+    assert payload["verifier"]["pass"] == 1
+    assert payload["cost"]["meta"]["backend"] == "stub"
+    assert "verdict" not in payload
+    assert "outcome" not in payload
 
 
 def test_pass_from_pass_ok_is_one() -> None:
@@ -38,8 +42,7 @@ def test_json_mode_parse_failure_records_reason_codes() -> None:
     payload = event.to_dict()
     verifier = payload["verifier"]
 
-    assert payload["verdict"] == "FAIL"
-    assert payload["outcome"] in {"UNKNOWN", "FAIL"}
     assert verifier["verdict"] == "FAIL"
+    assert verifier["outcome"] in {"UNKNOWN", "FAIL"}
     assert "format_leak" in (verifier["reason_codes"] or [])
     assert "json_parse" in (verifier["violated_constraints"] or [])

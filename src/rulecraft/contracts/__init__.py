@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal, Mapping, TypeVar
 
+from .normalize import normalize_eventlog_dict
 from .ssot import SCHEMA_VERSION
 from .types import EventLog, VerifierResult, pass_from
 
@@ -136,9 +137,9 @@ __all__ = [
     "RunLog",
     "TraceBundle",
     "pass_from",
+    "normalize_eventlog_dict",
     "is_pass",
     "is_confirmed_pass",
     "to_dict",
     "from_dict",
 ]
-

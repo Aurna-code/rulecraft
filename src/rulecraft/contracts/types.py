@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping
 
+from .normalize import normalize_eventlog_dict
 from .ssot import SCHEMA_VERSION
 
 
@@ -35,48 +36,54 @@ class EventLog:
     schema_version: str = SCHEMA_VERSION
     trace_id: str = ""
     x_ref: str = ""
+    bucket_key: str | None = None
+    flow_tags: list[str] | None = None
     selected_rules: list[Any] = field(default_factory=list)
+    run: dict[str, Any] | None = None
+    outputs: dict[str, Any] | None = None
     verifier: VerifierResult | dict[str, Any] = field(default_factory=dict)
-    verdict: str | None = None
-    outcome: str | None = None
     cost: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         if isinstance(self.verifier, dict):
             payload["verifier"] = dict(self.verifier)
-        return payload
+        return normalize_eventlog_dict(payload)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "EventLog":
-        verifier_data = data.get("verifier", {})
+        normalized = normalize_eventlog_dict(dict(data))
+
+        verifier_data = normalized.get("verifier", {})
         verifier: VerifierResult | dict[str, Any]
         if isinstance(verifier_data, VerifierResult):
             verifier = verifier_data
         elif isinstance(verifier_data, Mapping):
-            if "verdict" in verifier_data and "outcome" in verifier_data:
-                verifier = VerifierResult.from_dict(verifier_data)
-            else:
-                verifier = dict(verifier_data)
+            verifier = dict(verifier_data)
         else:
             verifier = {}
 
-        selected_rules = data.get("selected_rules")
+        selected_rules = normalized.get("selected_rules")
         if not isinstance(selected_rules, list):
             selected_rules = []
 
-        cost = data.get("cost")
+        cost = normalized.get("cost")
         if not isinstance(cost, Mapping):
             cost = {}
 
+        run = normalized.get("run")
+        outputs = normalized.get("outputs")
+
         return cls(
-            schema_version=str(data.get("schema_version", SCHEMA_VERSION)),
-            trace_id=str(data.get("trace_id", "")),
-            x_ref=str(data.get("x_ref", "")),
+            schema_version=str(normalized.get("schema_version", SCHEMA_VERSION)),
+            trace_id=str(normalized.get("trace_id", "")),
+            x_ref=str(normalized.get("x_ref", "")),
+            bucket_key=normalized.get("bucket_key") if isinstance(normalized.get("bucket_key"), str) else None,
+            flow_tags=normalized.get("flow_tags") if isinstance(normalized.get("flow_tags"), list) else None,
             selected_rules=selected_rules,
+            run=dict(run) if isinstance(run, Mapping) else None,
+            outputs=dict(outputs) if isinstance(outputs, Mapping) else None,
             verifier=verifier,
-            verdict=str(data.get("verdict")) if isinstance(data.get("verdict"), str) else None,
-            outcome=str(data.get("outcome")) if isinstance(data.get("outcome"), str) else None,
             cost=dict(cost),
         )
 
