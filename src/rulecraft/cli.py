@@ -45,6 +45,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def _build_metrics_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Aggregate metrics from EventLog JSONL records.")
     parser.add_argument("--path", default=".rulecraft/eventlog.jsonl", help="EventLog JSONL file path.")
+    parser.add_argument("--group-by", choices=("bucket_key",), default=None, help="Optional grouping dimension.")
     return parser
 
 
@@ -53,7 +54,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if raw_argv and raw_argv[0] == "metrics":
         parser = _build_metrics_parser()
         args = parser.parse_args(raw_argv[1:])
-        summary = summarize_jsonl(args.path)
+        summary = summarize_jsonl(args.path, group_by=args.group_by)
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
 
