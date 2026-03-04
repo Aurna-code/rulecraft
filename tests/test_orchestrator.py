@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from rulecraft.adapters.base import BackendAdapter
 from rulecraft.adapters.dummy import DummyAdapter
+from rulecraft.contracts import SCHEMA_VERSION
 from rulecraft.orchestrator import Orchestrator
 from rulecraft.rulebook.store import RulebookStore
 
@@ -107,7 +108,7 @@ def test_orchestrator_hot_loop_json_ok(tmp_path: Path) -> None:
     )
 
     assert output
-    assert runlog["schema_version"] == "0.1.0"
+    assert runlog["schema_version"] == SCHEMA_VERSION
     assert runlog["run_id"]
     assert runlog["validator"]["verdict"]
     assert runlog["validator"]["outcome"]
