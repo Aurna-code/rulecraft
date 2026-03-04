@@ -9,11 +9,13 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from rulecraft.adapters.scripted import ScriptedAdapter
 from rulecraft.adapters.stub import StubAdapter
 from rulecraft.cli import main
 from rulecraft.contracts import normalize_eventlog_dict
 from rulecraft.metrics.eventlog_metrics import summarize_jsonl
 from rulecraft.runner.batch import run_batch
+from rulecraft.rulebook.store import RulebookStore
 
 CANONICAL_KEYS = {
     "schema_version",
@@ -103,8 +105,66 @@ def test_run_batch_cli_stub_writes_output(tmp_path: Path, capsys: pytest.Capture
     assert len(out_path.read_text(encoding="utf-8").strip().splitlines()) == 3
 
 
-def test_run_batch_cli_openai_requires_api_key(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_run_batch_cli_openai_requires_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     exit_code = main(["run-batch", "--tasks", "missing.jsonl", "--adapter", "openai"])
     assert exit_code == 2
     assert "OPENAI_API_KEY is not set" in capsys.readouterr().out
+
+
+def test_run_batch_budget_router_can_stop_repair_attempts(tmp_path: Path) -> None:
+    tasks_path = tmp_path / "tasks_budget.jsonl"
+    out_path = tmp_path / "out_budget.jsonl"
+    tasks_path.write_text(
+        json.dumps({"task_id": "task-budget", "prompt": "Return JSON.", "mode": "json"}) + "\n",
+        encoding="utf-8",
+    )
+    adapter = ScriptedAdapter(scripts={"task-budget": ["not-json", '{"status":"ok"}']})
+
+    summary = run_batch(
+        tasks_path=tasks_path,
+        adapter=adapter,
+        out_path=out_path,
+        repair=True,
+        max_attempts=3,
+        budget_tokens=0,
+    )
+
+    assert summary == {"total": 1, "passed": 0, "failed": 0, "unknown": 1}
+    lines = out_path.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+
+
+def test_run_batch_rulebook_selects_and_injects_context(tmp_path: Path) -> None:
+    tasks_path = tmp_path / "tasks_rulebook.jsonl"
+    out_path = tmp_path / "out_rulebook.jsonl"
+    tasks_path.write_text(
+        json.dumps(
+            {
+                "task_id": "task-rulebook",
+                "prompt": "The customer asked about card replacement and card number safety.",
+                "mode": "text",
+                "bucket_key": "support",
+                "flow_tags": ["payments", "safety"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    store = RulebookStore.load_from_json(ROOT / "rules" / "sample_rulebook.json")
+    adapter = ScriptedAdapter(scripts={"task-rulebook": ["safe response"]})
+
+    summary = run_batch(tasks_path=tasks_path, adapter=adapter, out_path=out_path, rulebook_store=store)
+    assert summary == {"total": 1, "passed": 1, "failed": 0, "unknown": 0}
+
+    assert adapter.calls
+    assert "Rulecraft Context" in adapter.calls[0]["prompt"]
+
+    payload = json.loads(out_path.read_text(encoding="utf-8").strip())
+    assert payload["selected_rules"]
+    for rule in payload["selected_rules"]:
+        assert set(rule.keys()) == {"rule_id", "version", "type"}

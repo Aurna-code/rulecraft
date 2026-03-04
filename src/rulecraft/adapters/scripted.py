@@ -11,6 +11,7 @@ class ScriptedAdapter:
     def __init__(self, scripts: Mapping[str, Sequence[str]], default_text: str = "scripted-default-output") -> None:
         self.scripts = {str(task_id): [str(item) for item in outputs] for task_id, outputs in scripts.items()}
         self.default_text = default_text
+        self.calls: list[dict[str, Any]] = []
 
     def generate(
         self,
@@ -21,8 +22,14 @@ class ScriptedAdapter:
         instructions: str | None = None,
         **_: Any,
     ) -> tuple[str, dict[str, Any]]:
-        _ = instructions
-        _ = prompt
+        self.calls.append(
+            {
+                "task_id": task_id,
+                "attempt_idx": attempt_idx,
+                "instructions": instructions,
+                "prompt": prompt,
+            }
+        )
 
         task_key = str(task_id or "")
         scripted_outputs = self.scripts.get(task_key)

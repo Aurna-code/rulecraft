@@ -60,6 +60,11 @@ def _build_run_batch_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", default=".rulecraft/eventlog.jsonl", help="EventLog JSONL output path.")
     parser.add_argument("--limit", type=int, default=None, help="Optional maximum number of tasks to execute.")
     parser.add_argument("--instructions", default=None, help="Optional adapter instructions.")
+    parser.add_argument("--repair", action="store_true", help="Enable repair attempts for failed tasks.")
+    parser.add_argument("--max-attempts", type=int, default=1, help="Maximum attempts per task including primary.")
+    parser.add_argument("--budget-usd", type=float, default=None, help="Optional per-task budget ceiling in USD.")
+    parser.add_argument("--budget-tokens", type=int, default=None, help="Optional per-task token budget ceiling.")
+    parser.add_argument("--rulebook", default=None, help="Optional rulebook JSON path for selection and injection.")
     return parser
 
 
@@ -87,6 +92,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("OPENAI_API_KEY is not set. Skipping OpenAI batch run.")
             return 2
 
+        if args.max_attempts < 1:
+            parser.error("--max-attempts must be >= 1")
+
+        if args.budget_tokens is not None and args.budget_tokens < 0:
+            parser.error("--budget-tokens must be >= 0")
+
+        rulebook_store = None
+        if args.rulebook:
+            try:
+                rulebook_store = RulebookStore.load_from_json(args.rulebook)
+            except Exception as exc:  # pragma: no cover - parser error path
+                parser.error(f"failed to load Rulebook from {args.rulebook!r}: {exc}")
+
         adapter = _build_batch_adapter(args.adapter)
         summary = run_batch(
             tasks_path=args.tasks,
@@ -94,6 +112,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             out_path=args.out,
             instructions=args.instructions,
             limit=args.limit,
+            repair=bool(args.repair),
+            max_attempts=int(args.max_attempts),
+            budget_usd=args.budget_usd,
+            budget_tokens=args.budget_tokens,
+            rulebook_store=rulebook_store,
         )
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
