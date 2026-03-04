@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import json
+import sys
 from typing import Sequence
 
 from .adapters.dummy import DummyAdapter
+from .metrics.eventlog_metrics import summarize_jsonl
 from .orchestrator import Orchestrator
 from .rulebook.store import RulebookStore
 
@@ -39,9 +42,23 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _build_metrics_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Aggregate metrics from EventLog JSONL records.")
+    parser.add_argument("--path", default=".rulecraft/eventlog.jsonl", help="EventLog JSONL file path.")
+    return parser
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    raw_argv = list(argv) if argv is not None else list(sys.argv[1:])
+    if raw_argv and raw_argv[0] == "metrics":
+        parser = _build_metrics_parser()
+        args = parser.parse_args(raw_argv[1:])
+        summary = summarize_jsonl(args.path)
+        print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+
     parser = _build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(raw_argv)
 
     try:
         rulebook_store = RulebookStore.load_from_json(args.rulebook)
