@@ -1,15 +1,19 @@
-"""Minimal CLI for Rulecraft v0.1 single-run execution."""
+"""CLI entry points for Rulecraft local runs and experiments."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
-from typing import Sequence
+from typing import Any, Sequence
 
 from .adapters.dummy import DummyAdapter
+from .adapters.openai_adapter import OpenAIAdapter
+from .adapters.stub import StubAdapter
 from .metrics.eventlog_metrics import summarize_jsonl
 from .orchestrator import Orchestrator
+from .runner.batch import run_batch
 from .rulebook.store import RulebookStore
 
 
@@ -49,12 +53,48 @@ def _build_metrics_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _build_run_batch_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run batch tasks and append canonical EventLog records.")
+    parser.add_argument("--tasks", required=True, help="Task JSONL path.")
+    parser.add_argument("--adapter", choices=("stub", "openai"), default="stub", help="Batch adapter backend.")
+    parser.add_argument("--out", default=".rulecraft/eventlog.jsonl", help="EventLog JSONL output path.")
+    parser.add_argument("--limit", type=int, default=None, help="Optional maximum number of tasks to execute.")
+    parser.add_argument("--instructions", default=None, help="Optional adapter instructions.")
+    return parser
+
+
+def _build_batch_adapter(adapter_spec: str) -> Any:
+    if adapter_spec == "stub":
+        return StubAdapter(mode="text")
+    if adapter_spec == "openai":
+        return OpenAIAdapter()
+    raise ValueError(f"Unsupported batch adapter: {adapter_spec!r}")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     raw_argv = list(argv) if argv is not None else list(sys.argv[1:])
     if raw_argv and raw_argv[0] == "metrics":
         parser = _build_metrics_parser()
         args = parser.parse_args(raw_argv[1:])
         summary = summarize_jsonl(args.path, group_by=args.group_by)
+        print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+    if raw_argv and raw_argv[0] == "run-batch":
+        parser = _build_run_batch_parser()
+        args = parser.parse_args(raw_argv[1:])
+
+        if args.adapter == "openai" and not os.getenv("OPENAI_API_KEY"):
+            print("OPENAI_API_KEY is not set. Skipping OpenAI batch run.")
+            return 2
+
+        adapter = _build_batch_adapter(args.adapter)
+        summary = run_batch(
+            tasks_path=args.tasks,
+            adapter=adapter,
+            out_path=args.out,
+            instructions=args.instructions,
+            limit=args.limit,
+        )
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
 

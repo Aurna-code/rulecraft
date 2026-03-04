@@ -17,6 +17,7 @@ from .contracts import (
 from .ids import new_run_id, stable_hash_id
 from .orchestrator import Orchestrator
 from .policy import BudgetController
+from .runner import run_batch, run_once
 from .validator import validate_l1
 
 __all__ = [
@@ -38,4 +39,6 @@ __all__ = [
     "BudgetController",
     "Orchestrator",
     "validate_l1",
+    "run_once",
+    "run_batch",
 ]

@@ -1,0 +1,6 @@
+{"task_id":"task-001","prompt":"Write one short greeting for a support chatbot.","mode":"text","bucket_key":"support","flow_tags":["smoke","text"]}
+{"task_id":"task-002","prompt":"Return a JSON object with key status set to ok.","mode":"json","bucket_key":"support","flow_tags":["smoke","json"]}
+{"task_id":"task-003","prompt":"Provide one sentence explaining the refund policy.","mode":"text","bucket_key":"billing","flow_tags":["policy"]}
+{"task_id":"task-004","prompt":"Return a JSON list with two next steps.","mode":"json","bucket_key":"billing","flow_tags":["json","failure-path"]}
+{"task_id":"task-005","prompt":"Summarize this case in one sentence.","mode":"text","bucket_key":"triage","flow_tags":["triage"]}
+{"task_id":"task-006","prompt":"Return a JSON object with escalation=true.","mode":"json","bucket_key":null,"flow_tags":["json","null-bucket"]}

@@ -23,6 +23,54 @@ This writes `logs/runlog.jsonl`. Example record (shortened):
 {"run_id":"39568b25-b4a6-47ff-a25b-43cd3c4189c3","input_ref":"mem://input/39568b25-b4a6-47ff-a25b-43cd3c4189c3","outputs":{"output_ref":"mem://output/39568b25-b4a6-47ff-a25b-43cd3c4189c3"},"validator":{"validator_id":"validator.l1.static","verdict":"PASS","outcome":"OK"},"control_signals":{"budget_tier":"hot","should_escalate":false,"early_exit":true,"repair_attempted":false,"repair_succeeded":false,"adapter_calls":1,"exit_stage":"l1","exit_reason":"confirmed_pass"}}
 ```
 
+## EventLog and Metrics
+
+Run the minimal EventLog writer:
+
+```bash
+python examples/minimal_runner.py
+```
+
+Aggregate EventLog metrics:
+
+```bash
+python -m rulecraft metrics --path .rulecraft/eventlog.jsonl
+```
+
+Aggregate by `bucket_key`:
+
+```bash
+python -m rulecraft metrics --path .rulecraft/eventlog.jsonl --group-by bucket_key
+```
+
+## Batch Experiments
+
+Run a batch with the local stub adapter:
+
+```bash
+python -m rulecraft run-batch \
+  --tasks examples/tasks/sample_tasks.jsonl \
+  --adapter stub \
+  --out .rulecraft/batch_eventlog.jsonl
+```
+
+Run the example wrapper script:
+
+```bash
+python examples/minimal_batch_run.py
+```
+
+Run a batch with OpenAI Responses API:
+
+```bash
+python -m rulecraft run-batch \
+  --tasks examples/tasks/sample_tasks.jsonl \
+  --adapter openai \
+  --out .rulecraft/batch_eventlog_openai.jsonl
+```
+
+The OpenAI adapter is optional. Set `OPENAI_API_KEY` before using `--adapter openai`.
+
 ## Core Components
 
 - `Orchestrator`: runtime hot-loop (`select -> inject -> generate -> validate -> repair(optional) -> log`).
