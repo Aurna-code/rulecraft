@@ -43,6 +43,14 @@ Aggregate by `bucket_key`:
 python -m rulecraft metrics --path .rulecraft/eventlog.jsonl --group-by bucket_key
 ```
 
+Include task-level metrics from `run.extra.task_id` and `run.extra.attempt_idx`:
+
+```bash
+python -m rulecraft metrics --path .rulecraft/eventlog.jsonl --task-metrics
+```
+
+Task pass semantics: a task is counted as passed when any attempt for that task passes.
+
 ## Batch Experiments
 
 Run a batch with the local stub adapter:
@@ -52,6 +60,29 @@ python -m rulecraft run-batch \
   --tasks examples/tasks/sample_tasks.jsonl \
   --adapter stub \
   --out .rulecraft/batch_eventlog.jsonl
+```
+
+Run with repair attempts and per-task budgets:
+
+```bash
+python -m rulecraft run-batch \
+  --tasks examples/tasks/sample_tasks.jsonl \
+  --adapter stub \
+  --out .rulecraft/batch_eventlog_repair.jsonl \
+  --repair \
+  --max-attempts 3 \
+  --budget-usd 0.10 \
+  --budget-tokens 2000
+```
+
+Run with rulebook selection and injection:
+
+```bash
+python -m rulecraft run-batch \
+  --tasks examples/tasks/sample_tasks.jsonl \
+  --adapter stub \
+  --out .rulecraft/batch_eventlog_rulebook.jsonl \
+  --rulebook rules/sample_rulebook.json
 ```
 
 Run the example wrapper script:
