@@ -10,6 +10,18 @@ _DEFAULT_VERIFIER_ID = "vf_l1_v1"
 _UNKNOWN_RULE_TYPE = "UnknownRule"
 _COST_NUMERIC_FIELDS = ("latency_ms", "tokens_in", "tokens_out", "tool_calls")
 _COST_META_FIELDS = ("backend", "model", "cost_usd", "error", "response_id")
+_CANONICAL_TOP_LEVEL_KEYS = {
+    "schema_version",
+    "trace_id",
+    "x_ref",
+    "bucket_key",
+    "flow_tags",
+    "selected_rules",
+    "run",
+    "outputs",
+    "verifier",
+    "cost",
+}
 
 
 def _coerce_optional_int(value: Any) -> int | None:
@@ -54,7 +66,7 @@ def _normalize_selected_rules(value: Any) -> list[dict[str, str]]:
             normalized.append(
                 {
                     "rule_id": item,
-                    "version": SCHEMA_VERSION,
+                    "version": "legacy",
                     "type": _UNKNOWN_RULE_TYPE,
                 }
             )
@@ -71,6 +83,18 @@ def _normalize_selected_rules(value: Any) -> list[dict[str, str]]:
                 }
             )
     return normalized
+
+
+def _append_reason_code(verifier: dict[str, Any], reason_code: str) -> None:
+    reason_codes = verifier.get("reason_codes")
+    if isinstance(reason_codes, list):
+        normalized_codes = [code for code in reason_codes if isinstance(code, str) and code]
+    else:
+        normalized_codes = []
+
+    if reason_code not in normalized_codes:
+        normalized_codes.append(reason_code)
+    verifier["reason_codes"] = normalized_codes
 
 
 def _normalize_verifier(raw: Mapping[str, Any], event: Mapping[str, Any]) -> dict[str, Any]:
@@ -123,10 +147,17 @@ def _normalize_verifier(raw: Mapping[str, Any], event: Mapping[str, Any]) -> dic
     return normalized
 
 
-def _normalize_cost(raw: Mapping[str, Any], event: Mapping[str, Any]) -> dict[str, Any]:
+def _normalize_cost(raw: Mapping[str, Any], event: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
     raw_cost = dict(raw)
     raw_meta = raw_cost.get("meta")
-    meta: dict[str, Any] = dict(raw_meta) if isinstance(raw_meta, Mapping) else {}
+    meta_coerced = False
+    if isinstance(raw_meta, Mapping):
+        meta: dict[str, Any] = dict(raw_meta)
+    elif raw_meta is None:
+        meta = {}
+    else:
+        meta = {"_raw": str(raw_meta)}
+        meta_coerced = True
 
     for key in _COST_META_FIELDS:
         if key in raw_cost and key != "meta":
@@ -146,7 +177,40 @@ def _normalize_cost(raw: Mapping[str, Any], event: Mapping[str, Any]) -> dict[st
         "tool_calls": _coerce_optional_int(raw_cost.get("tool_calls", event.get("tool_calls"))),
         "meta": meta or None,
     }
-    return normalized
+    return normalized, meta_coerced
+
+
+def _normalize_run_with_extra(run_value: Any, event: Mapping[str, Any]) -> dict[str, Any] | None:
+    run: dict[str, Any]
+    if isinstance(run_value, Mapping):
+        run = dict(run_value)
+    else:
+        run = {}
+
+    legacy_extra: dict[str, Any] = {}
+    for key, value in event.items():
+        if key not in _CANONICAL_TOP_LEVEL_KEYS:
+            legacy_extra[key] = value
+
+    run_extra_raw = run.get("extra")
+    if isinstance(run_extra_raw, Mapping):
+        run_extra = dict(run_extra_raw)
+    elif run_extra_raw is None:
+        run_extra = {}
+    else:
+        run_extra = {"_raw": str(run_extra_raw)}
+
+    if legacy_extra:
+        run_extra.update(legacy_extra)
+
+    if run_extra:
+        run["extra"] = run_extra
+    elif "extra" in run:
+        del run["extra"]
+
+    if not run:
+        return None
+    return run
 
 
 def normalize_eventlog_dict(d: dict[str, Any]) -> dict[str, Any]:
@@ -168,6 +232,10 @@ def normalize_eventlog_dict(d: dict[str, Any]) -> dict[str, Any]:
 
     run = event.get("run")
     outputs = event.get("outputs")
+    normalized_verifier = _normalize_verifier(verifier_map, event)
+    normalized_cost, cost_meta_coerced = _normalize_cost(cost_map, event)
+    if cost_meta_coerced:
+        _append_reason_code(normalized_verifier, "cost_meta_coerced")
 
     normalized: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
@@ -176,9 +244,9 @@ def normalize_eventlog_dict(d: dict[str, Any]) -> dict[str, Any]:
         "bucket_key": bucket_key,
         "flow_tags": flow_tags,
         "selected_rules": _normalize_selected_rules(event.get("selected_rules")),
-        "run": dict(run) if isinstance(run, Mapping) else None,
+        "run": _normalize_run_with_extra(run, event),
         "outputs": dict(outputs) if isinstance(outputs, Mapping) else None,
-        "verifier": _normalize_verifier(verifier_map, event),
-        "cost": _normalize_cost(cost_map, event),
+        "verifier": normalized_verifier,
+        "cost": normalized_cost,
     }
     return normalized
