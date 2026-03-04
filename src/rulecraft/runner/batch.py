@@ -10,6 +10,7 @@ from typing import Any, Iterator, Literal
 
 from ..contracts import EventLog, pass_from
 from ..logging import append_event
+from ..policy.repair_loop import build_repair_prompt
 from ..verifier import verify_text
 
 TaskMode = Literal["text", "json"]
@@ -99,7 +100,31 @@ def _iter_tasks(tasks_path: str | Path, limit: int | None) -> Iterator[dict[str,
                 break
 
 
-def _generate(adapter: Any, prompt: str, instructions: str | None) -> tuple[str, dict[str, Any]]:
+def _generate(
+    adapter: Any,
+    prompt: str,
+    instructions: str | None,
+    *,
+    task_id: str,
+    attempt_idx: int,
+    phase: str,
+) -> tuple[str, dict[str, Any]]:
+    kwargs = {
+        "instructions": instructions,
+        "task_id": task_id,
+        "attempt_idx": attempt_idx,
+        "phase": phase,
+    }
+
+    try:
+        response = adapter.generate(prompt, **kwargs)
+        if isinstance(response, tuple) and len(response) == 2:
+            text, meta = response
+            if isinstance(meta, dict):
+                return str(text), dict(meta)
+    except TypeError:
+        pass
+
     if instructions:
         try:
             response = adapter.generate(prompt, instructions=instructions)
@@ -122,54 +147,101 @@ def run_batch(
     out_path: str | Path,
     instructions: str | None = None,
     limit: int | None = None,
+    repair: bool = False,
+    max_attempts: int = 1,
 ) -> dict[str, int]:
     summary = {"total": 0, "passed": 0, "failed": 0, "unknown": 0}
+    attempts_limit = max(int(max_attempts), 1)
 
     for task in _iter_tasks(tasks_path, limit):
         prompt = str(task["prompt"])
         mode = str(task["mode"])
-        text, meta = _generate(adapter, prompt, instructions)
-        verifier_result = verify_text(task_mode=mode, y=text)
+        trace_id = str(uuid.uuid4())
+        task_id = str(task["task_id"])
+        attempt_prompt = prompt
+        attempt_instructions = instructions
+        final_verifier_result = None
 
-        cost_meta = {
-            "backend": meta.get("backend", "unknown"),
-            "model": meta.get("model", meta.get("model_name", "unknown")),
-            "cost_usd": _coerce_optional_float(meta.get("cost_usd")),
-            "error": meta.get("error"),
-        }
-        if meta.get("response_id") is not None:
-            cost_meta["response_id"] = meta.get("response_id")
+        for attempt_idx in range(attempts_limit):
+            phase = "primary" if attempt_idx == 0 else "repair"
+            text, meta = _generate(
+                adapter,
+                attempt_prompt,
+                attempt_instructions,
+                task_id=task_id,
+                attempt_idx=attempt_idx,
+                phase=phase,
+            )
+            verifier_result = verify_text(task_mode=mode, y=text)
+            final_verifier_result = verifier_result
 
-        event = EventLog(
-            trace_id=str(uuid.uuid4()),
-            x_ref=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
-            bucket_key=task["bucket_key"],
-            flow_tags=task["flow_tags"],
-            selected_rules=[],
-            run={"mode": "batch", "task_id": task["task_id"]},
-            outputs={"task_id": task["task_id"]},
-            verifier={
-                "verifier_id": "vf_l1_v1",
+            cost_meta = {
+                "backend": meta.get("backend", "unknown"),
+                "model": meta.get("model", meta.get("model_name", "unknown")),
+                "cost_usd": _coerce_optional_float(meta.get("cost_usd")),
+                "error": meta.get("error"),
+            }
+            if meta.get("response_id") is not None:
+                cost_meta["response_id"] = meta.get("response_id")
+
+            event = EventLog(
+                trace_id=trace_id,
+                x_ref=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+                bucket_key=task["bucket_key"],
+                flow_tags=task["flow_tags"],
+                selected_rules=[],
+                run={
+                    "mode": "batch",
+                    "task_id": task_id,
+                    "extra": {
+                        "task_id": task_id,
+                        "attempt_idx": attempt_idx,
+                        "phase": phase,
+                    },
+                },
+                outputs={"task_id": task_id},
+                verifier={
+                    "verifier_id": "vf_l1_v1",
+                    "verdict": verifier_result.verdict,
+                    "outcome": verifier_result.outcome,
+                    "reason_codes": verifier_result.reason_codes,
+                    "violated_constraints": verifier_result.violated_constraints,
+                    "pass": pass_from(verifier_result),
+                },
+                cost={
+                    "latency_ms": _coerce_optional_int(meta.get("latency_ms")),
+                    "tokens_in": _coerce_optional_int(meta.get("tokens_in")),
+                    "tokens_out": _coerce_optional_int(meta.get("tokens_out")),
+                    "tool_calls": _coerce_optional_int(meta.get("tool_calls")),
+                    "meta": cost_meta,
+                },
+            )
+            append_event(str(out_path), event)
+
+            if verifier_result.verdict == "PASS" and verifier_result.outcome != "FAIL":
+                break
+            if not repair or attempt_idx + 1 >= attempts_limit:
+                break
+
+            verifier_payload = {
                 "verdict": verifier_result.verdict,
                 "outcome": verifier_result.outcome,
                 "reason_codes": verifier_result.reason_codes,
                 "violated_constraints": verifier_result.violated_constraints,
-                "pass": pass_from(verifier_result),
-            },
-            cost={
-                "latency_ms": _coerce_optional_int(meta.get("latency_ms")),
-                "tokens_in": _coerce_optional_int(meta.get("tokens_in")),
-                "tokens_out": _coerce_optional_int(meta.get("tokens_out")),
-                "tool_calls": _coerce_optional_int(meta.get("tool_calls")),
-                "meta": cost_meta,
-            },
-        )
-        append_event(str(out_path), event)
+            }
+            attempt_prompt, attempt_instructions = build_repair_prompt(
+                task_prompt=prompt,
+                mode=mode,
+                last_output=text,
+                verifier=verifier_payload,
+            )
 
         summary["total"] += 1
-        if verifier_result.verdict == "PASS" and verifier_result.outcome != "FAIL":
+        if final_verifier_result is None:
+            continue
+        if final_verifier_result.verdict == "PASS" and final_verifier_result.outcome != "FAIL":
             summary["passed"] += 1
-        elif verifier_result.outcome == "UNKNOWN":
+        elif final_verifier_result.outcome == "UNKNOWN":
             summary["unknown"] += 1
         else:
             summary["failed"] += 1
