@@ -22,13 +22,13 @@ def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
             fp.write("\n")
 
 
-def _write_rulebook(path: Path, *, body: str) -> None:
+def _write_rulebook(path: Path, *, body: str, rule_id: str = "RB-1") -> None:
     payload = {
         "rulebook_name": "Rulebook",
         "rules": [
             {
                 "schema_version": "0.1.0",
-                "rule_id": "RB-1",
+                "rule_id": rule_id,
                 "version": "0.1.0",
                 "type": "StrategyRule",
                 "status": "active",
@@ -72,8 +72,8 @@ def test_run_rule_promotion_passes_when_candidate_improves(tmp_path: Path) -> No
             {"task_id": "task-2", "prompt": "Return JSON status.", "mode": "json", "bucket_key": "alpha"},
         ],
     )
-    _write_rulebook(baseline_rulebook_path, body="Respond as usual.")
-    _write_rulebook(candidate_rulebook_path, body="Output JSON only.")
+    _write_rulebook(baseline_rulebook_path, body="Respond as usual.", rule_id="RB-BASE")
+    _write_rulebook(candidate_rulebook_path, body="Output JSON only.", rule_id="RB-CAND")
 
     report = run_rule_promotion(
         tasks_path=tasks_path,
@@ -88,6 +88,9 @@ def test_run_rule_promotion_passes_when_candidate_improves(tmp_path: Path) -> No
     assert report["deltas"]["task_pass_rate"] > 0.01
     assert report["deltas"]["strong_pass_rate"] > 0.01
     assert report["regressions"] == []
+    assert report["rule_impact"]["improvements"]["tasks_improved"] == 2
+    assert report["rule_impact"]["improvements"]["top_rules_on_improvements"][0]["rule_id"] == "RB-CAND"
+    assert report["rule_impact"]["candidate"]["rule_selection_counts"]["RB-CAND"] > 0
 
 
 def test_run_rule_promotion_fails_when_candidate_regresses(tmp_path: Path) -> None:
@@ -101,8 +104,8 @@ def test_run_rule_promotion_fails_when_candidate_regresses(tmp_path: Path) -> No
             {"task_id": "task-2", "prompt": "Return JSON status.", "mode": "json", "bucket_key": "alpha"},
         ],
     )
-    _write_rulebook(baseline_rulebook_path, body="Output JSON only.")
-    _write_rulebook(candidate_rulebook_path, body="Respond as usual.")
+    _write_rulebook(baseline_rulebook_path, body="Output JSON only.", rule_id="RB-BASE")
+    _write_rulebook(candidate_rulebook_path, body="Respond as usual.", rule_id="RB-CAND")
 
     report = run_rule_promotion(
         tasks_path=tasks_path,
@@ -116,6 +119,8 @@ def test_run_rule_promotion_fails_when_candidate_regresses(tmp_path: Path) -> No
     assert report["ok"] is False
     assert any(item["metric"] == "strong_pass_rate" for item in report["regressions"])
     assert any(item["metric"] == "task_pass_rate" for item in report["regressions"])
+    assert report["rule_impact"]["regressions"]["tasks_regressed"] == 2
+    assert report["rule_impact"]["regressions"]["top_rules_on_regressions"][0]["rule_id"] == "RB-CAND"
 
 
 def test_promote_rules_cli_fail_on_regression_returns_3(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

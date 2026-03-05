@@ -153,6 +153,39 @@ python -m rulecraft rule-suggest \
 
 `rule-suggest` focuses on format/schema compliance, contract restatement, and deterministic output guidance. Suggestions are conservative and avoid adding factual claims.
 
+Lint a rulebook for structural issues, duplicates, conflicts, and optional eventlog usage:
+
+```bash
+python -m rulecraft rule-lint \
+  --rulebook .rulecraft/suggested_rulebook.json \
+  --eventlog .rulecraft/eventlog.jsonl
+```
+
+`rule-lint` exit codes:
+
+- `0`: no errors (warnings are allowed)
+- `4`: lint errors, or warnings when `--strict` is set
+
+Prune low-value rules from a rulebook using eventlog selection/impact stats:
+
+```bash
+python -m rulecraft rule-prune \
+  --rulebook .rulecraft/suggested_rulebook.json \
+  --eventlog .rulecraft/eventlog.jsonl \
+  --out .rulecraft/pruned_rulebook.json \
+  --min-selected 3
+```
+
+Dry-run pruning without writing output:
+
+```bash
+python -m rulecraft rule-prune \
+  --rulebook .rulecraft/suggested_rulebook.json \
+  --eventlog .rulecraft/eventlog.jsonl \
+  --out .rulecraft/pruned_rulebook.json \
+  --dry-run
+```
+
 ## Regression Packs and Promotion Gates
 
 Build a micro-regression pack from failure clusters and pass-task canaries:
@@ -216,6 +249,10 @@ Rule gate report highlights:
 - `deltas.task_pass_rate` and `deltas.strong_pass_rate`: candidate minus baseline task success deltas.
 - `deltas.schema_violation_rate` and `deltas.format_leak_rate`: quality and compliance regressions.
 - `top_worsened_clusters`: baseline top failure clusters that got worse in candidate runs.
+- `rule_impact.baseline.rule_selection_counts` and `rule_impact.candidate.rule_selection_counts`: rule usage counts by `rule_id`.
+- `rule_impact.improvements.top_rules_on_improvements`: candidate rules most associated with improved tasks.
+- `rule_impact.regressions.top_rules_on_regressions`: candidate rules most associated with regressed tasks.
+- `rule_impact.*.unused_rules`: rule IDs that were never selected in the corresponding run.
 - `regressions`: hard threshold failures (with `--fail-on-regression`, CLI returns exit code `3`).
 
 ## Task Contracts and L3 Validation

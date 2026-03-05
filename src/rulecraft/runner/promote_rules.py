@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping
 
 from ..metrics.eventlog_metrics import iter_normalized_jsonl, summarize_jsonl
 from ..policy.profile import load_profile
+from ..rulebook.lint import lint_rulebook
 from ..rulebook.store import RulebookStore
 from .batch import run_batch
 
@@ -59,24 +61,18 @@ def _extract_task_id(event: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _collect_strong_pass_rate(path: str | Path) -> float:
-    task_strong_pass: dict[str, bool] = {}
-    for event in iter_normalized_jsonl(path):
-        task_id = _extract_task_id(event)
-        if task_id is None:
+def _event_selected_rule_ids(event: Mapping[str, Any]) -> list[str]:
+    selected = event.get("selected_rules")
+    if not isinstance(selected, list):
+        return []
+    rule_ids: list[str] = []
+    for item in selected:
+        if not isinstance(item, Mapping):
             continue
-        task_strong_pass.setdefault(task_id, False)
-
-        verifier = event.get("verifier")
-        if not isinstance(verifier, Mapping):
-            continue
-        if verifier.get("verdict") == "PASS" and verifier.get("outcome") == "OK":
-            task_strong_pass[task_id] = True
-
-    if not task_strong_pass:
-        return 0.0
-    passed = sum(1 for value in task_strong_pass.values() if value)
-    return passed / len(task_strong_pass)
+        rule_id = item.get("rule_id")
+        if isinstance(rule_id, str) and rule_id:
+            rule_ids.append(rule_id)
+    return rule_ids
 
 
 def _collect_cluster_counts(path: str | Path) -> Counter[str]:
@@ -91,7 +87,31 @@ def _collect_cluster_counts(path: str | Path) -> Counter[str]:
     return counts
 
 
-def _collect_metrics(path: str | Path) -> tuple[dict[str, float], Counter[str]]:
+def _collect_task_rule_data(path: str | Path) -> tuple[dict[str, bool], dict[str, set[str]], Counter[str]]:
+    strong_pass_by_task: dict[str, bool] = {}
+    selected_rules_by_task: dict[str, set[str]] = {}
+    rule_selection_counts: Counter[str] = Counter()
+
+    for event in iter_normalized_jsonl(path):
+        task_id = _extract_task_id(event)
+        if task_id is None:
+            continue
+
+        strong_pass_by_task.setdefault(task_id, False)
+        selected_rules_by_task.setdefault(task_id, set())
+
+        verifier = event.get("verifier")
+        if isinstance(verifier, Mapping) and verifier.get("verdict") == "PASS" and verifier.get("outcome") == "OK":
+            strong_pass_by_task[task_id] = True
+
+        for rule_id in _event_selected_rule_ids(event):
+            selected_rules_by_task[task_id].add(rule_id)
+            rule_selection_counts[rule_id] += 1
+
+    return strong_pass_by_task, selected_rules_by_task, rule_selection_counts
+
+
+def _collect_metrics(path: str | Path) -> tuple[dict[str, Any], Counter[str], dict[str, bool], dict[str, set[str]], Counter[str]]:
     summary = summarize_jsonl(path, task_metrics=True)
     event_metrics = summary.get("event_metrics") if isinstance(summary, Mapping) else None
     task_metrics = summary.get("task_metrics") if isinstance(summary, Mapping) else None
@@ -101,19 +121,20 @@ def _collect_metrics(path: str | Path) -> tuple[dict[str, float], Counter[str]]:
         task_metrics = {}
 
     cluster_counts = _collect_cluster_counts(path)
+    strong_pass_by_task, selected_rules_by_task, rule_selection_counts = _collect_task_rule_data(path)
     top_clusters = [
         {"cluster_id": cluster_id, "count": count}
         for cluster_id, count in sorted(cluster_counts.items(), key=lambda item: (-item[1], item[0]))[:10]
     ]
     metrics = {
         "task_pass_rate": _as_float(task_metrics.get("task_pass_rate")),
-        "strong_pass_rate": _collect_strong_pass_rate(path),
+        "strong_pass_rate": _safe_rate(sum(1 for passed in strong_pass_by_task.values() if passed), len(strong_pass_by_task)),
         "avg_attempts_per_task": _as_float(task_metrics.get("avg_attempts_per_task")),
         "schema_violation_rate": _as_float(event_metrics.get("schema_violation_rate")),
         "format_leak_rate": _as_float(event_metrics.get("format_leak_rate")),
         "top_failure_clusters": top_clusters,
     }
-    return metrics, cluster_counts
+    return metrics, cluster_counts, strong_pass_by_task, selected_rules_by_task, rule_selection_counts
 
 
 def _delta_map(baseline: Mapping[str, Any], candidate: Mapping[str, Any]) -> dict[str, float]:
@@ -125,6 +146,72 @@ def _delta_map(baseline: Mapping[str, Any], candidate: Mapping[str, Any]) -> dic
         "format_leak_rate",
     )
     return {key: _as_float(candidate.get(key)) - _as_float(baseline.get(key)) for key in keys}
+
+
+def _safe_rate(numerator: int, denominator: int) -> float:
+    if denominator <= 0:
+        return 0.0
+    return numerator / denominator
+
+
+def _top_rule_rows(counter: Mapping[str, int], *, denominator: int | None = None, limit: int = 10) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for rule_id, count in sorted(counter.items(), key=lambda item: (-int(item[1]), item[0]))[:limit]:
+        if denominator is None:
+            share = None
+        else:
+            share = _safe_rate(int(count), denominator)
+        row = {"rule_id": rule_id, "count": int(count)}
+        if share is not None:
+            row["share"] = share
+        rows.append(row)
+    return rows
+
+
+def _cluster_delta_rows(
+    baseline_counts: Mapping[str, int],
+    candidate_counts: Mapping[str, int],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    improved: list[dict[str, Any]] = []
+    worsened: list[dict[str, Any]] = []
+    all_cluster_ids = sorted(set(baseline_counts) | set(candidate_counts))
+    for cluster_id in all_cluster_ids:
+        baseline_count = int(baseline_counts.get(cluster_id, 0))
+        candidate_count = int(candidate_counts.get(cluster_id, 0))
+        delta = baseline_count - candidate_count
+        if delta > 0:
+            improved.append({"cluster_id": cluster_id, "delta_count": delta})
+        elif delta < 0:
+            worsened.append({"cluster_id": cluster_id, "delta_count": -delta})
+    improved.sort(key=lambda item: (-item["delta_count"], item["cluster_id"]))
+    worsened.sort(key=lambda item: (-item["delta_count"], item["cluster_id"]))
+    return improved, worsened
+
+
+def _rulebook_payload(path: str | Path) -> dict[str, Any]:
+    payload_raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    if isinstance(payload_raw, list):
+        return {"rules": payload_raw}
+    if isinstance(payload_raw, Mapping):
+        return dict(payload_raw)
+    return {"rules": []}
+
+
+def _unused_rule_ids(rulebook_payload: Mapping[str, Any], eventlog_path: str | Path) -> list[str]:
+    lint_result = lint_rulebook(dict(rulebook_payload), eventlog_path=str(eventlog_path))
+    warnings = lint_result.get("warnings")
+    if not isinstance(warnings, list):
+        return []
+    unused: set[str] = set()
+    for warning in warnings:
+        if not isinstance(warning, Mapping):
+            continue
+        if warning.get("code") != "RULE_UNUSED_IN_EVENTLOG":
+            continue
+        rule_id = warning.get("rule_id")
+        if isinstance(rule_id, str) and rule_id:
+            unused.add(rule_id)
+    return sorted(unused)
 
 
 def _evaluate_cluster_regressions(
@@ -250,6 +337,8 @@ def run_rule_promotion(
         if target.exists():
             target.unlink()
 
+    baseline_rulebook_payload = _rulebook_payload(baseline_rulebook_path)
+    candidate_rulebook_payload = _rulebook_payload(candidate_rulebook_path)
     baseline_rulebook = RulebookStore.load_from_json(baseline_rulebook_path)
     candidate_rulebook = RulebookStore.load_from_json(candidate_rulebook_path)
     policy_profile = _resolve_policy_profile(policy_profile_path)
@@ -275,11 +364,49 @@ def run_rule_promotion(
         policy_profile=policy_profile,
     )
 
-    baseline_metrics, baseline_clusters = _collect_metrics(baseline_out)
-    candidate_metrics, candidate_clusters = _collect_metrics(candidate_out)
+    (
+        baseline_metrics,
+        baseline_clusters,
+        baseline_strong_by_task,
+        baseline_selected_by_task,
+        baseline_rule_selection_counts,
+    ) = _collect_metrics(baseline_out)
+    (
+        candidate_metrics,
+        candidate_clusters,
+        candidate_strong_by_task,
+        candidate_selected_by_task,
+        candidate_rule_selection_counts,
+    ) = _collect_metrics(candidate_out)
     deltas = _delta_map(baseline_metrics, candidate_metrics)
     regressions, warnings, worsened_clusters = _evaluate_gate(deltas, baseline_clusters, candidate_clusters)
     ok = len(regressions) == 0
+
+    all_task_ids = sorted(set(baseline_strong_by_task) | set(candidate_strong_by_task))
+    improved_tasks = [
+        task_id
+        for task_id in all_task_ids
+        if not bool(baseline_strong_by_task.get(task_id, False)) and bool(candidate_strong_by_task.get(task_id, False))
+    ]
+    regressed_tasks = [
+        task_id
+        for task_id in all_task_ids
+        if bool(baseline_strong_by_task.get(task_id, False)) and not bool(candidate_strong_by_task.get(task_id, False))
+    ]
+
+    improvement_rule_counts: Counter[str] = Counter()
+    for task_id in improved_tasks:
+        for rule_id in sorted(candidate_selected_by_task.get(task_id, set())):
+            improvement_rule_counts[rule_id] += 1
+
+    regression_rule_counts: Counter[str] = Counter()
+    for task_id in regressed_tasks:
+        for rule_id in sorted(candidate_selected_by_task.get(task_id, set())):
+            regression_rule_counts[rule_id] += 1
+
+    top_clusters_improved, top_clusters_worsened = _cluster_delta_rows(baseline_clusters, candidate_clusters)
+    baseline_total_rule_selections = int(sum(baseline_rule_selection_counts.values()))
+    candidate_total_rule_selections = int(sum(candidate_rule_selection_counts.values()))
 
     return {
         "ok": ok,
@@ -304,6 +431,54 @@ def run_rule_promotion(
             "eventlog_path": str(candidate_out),
         },
         "top_worsened_clusters": worsened_clusters[:10],
+        "rule_impact": {
+            "baseline": {
+                "rule_selection_counts": dict(
+                    sorted(
+                        ((rule_id, int(count)) for rule_id, count in baseline_rule_selection_counts.items()),
+                        key=lambda item: item[0],
+                    )
+                ),
+                "top_rules": _top_rule_rows(
+                    baseline_rule_selection_counts,
+                    denominator=baseline_total_rule_selections,
+                    limit=10,
+                ),
+                "unused_rules": _unused_rule_ids(baseline_rulebook_payload, baseline_out),
+            },
+            "candidate": {
+                "rule_selection_counts": dict(
+                    sorted(
+                        ((rule_id, int(count)) for rule_id, count in candidate_rule_selection_counts.items()),
+                        key=lambda item: item[0],
+                    )
+                ),
+                "top_rules": _top_rule_rows(
+                    candidate_rule_selection_counts,
+                    denominator=candidate_total_rule_selections,
+                    limit=10,
+                ),
+                "unused_rules": _unused_rule_ids(candidate_rulebook_payload, candidate_out),
+            },
+            "improvements": {
+                "tasks_improved": len(improved_tasks),
+                "top_rules_on_improvements": _top_rule_rows(
+                    improvement_rule_counts,
+                    denominator=len(improved_tasks),
+                    limit=10,
+                ),
+                "top_clusters_improved": top_clusters_improved[:10],
+            },
+            "regressions": {
+                "tasks_regressed": len(regressed_tasks),
+                "top_rules_on_regressions": _top_rule_rows(
+                    regression_rule_counts,
+                    denominator=len(regressed_tasks),
+                    limit=10,
+                ),
+                "top_clusters_worsened": top_clusters_worsened[:10],
+            },
+        },
         "regressions": regressions,
         "warnings": warnings,
     }
