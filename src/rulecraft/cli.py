@@ -22,6 +22,7 @@ from .runner.batch import run_batch
 from .runner.promote import run_promotion
 from .runner.promote_rules import run_rule_promotion
 from .rulebook.lint import lint_rulebook
+from .rulebook.prune import compute_rule_stats, prune_rulebook
 from .rulebook.suggest import suggest_rules
 from .rulebook.store import RulebookStore
 from .verifier.cache import SqliteVerifierCache
@@ -165,6 +166,18 @@ def _build_rule_lint_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rulebook", required=True, help="Rulebook JSON path.")
     parser.add_argument("--eventlog", default=None, help="Optional EventLog JSONL path for usage-aware checks.")
     parser.add_argument("--strict", action="store_true", help="Treat warnings as lint failures.")
+    return parser
+
+
+def _build_rule_prune_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Prune low-value rulebook entries using EventLog stats.")
+    parser.add_argument("--rulebook", required=True, help="Rulebook JSON path.")
+    parser.add_argument("--eventlog", required=True, help="EventLog JSONL path.")
+    parser.add_argument("--out", required=True, help="Output pruned rulebook JSON path.")
+    parser.add_argument("--min-selected", type=int, default=3, help="Minimum selection count to avoid pruning.")
+    parser.add_argument("--min-impact", type=float, default=None, help="Optional minimum impact threshold.")
+    parser.add_argument("--max-remove", type=int, default=None, help="Optional cap on removed rules.")
+    parser.add_argument("--dry-run", action="store_true", help="Print prune plan without writing output.")
     return parser
 
 
@@ -331,6 +344,54 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
         if error_count > 0 or (args.strict and warning_count > 0):
             return 4
+        return 0
+    if raw_argv and raw_argv[0] == "rule-prune":
+        parser = _build_rule_prune_parser()
+        args = parser.parse_args(raw_argv[1:])
+        if args.min_selected < 0:
+            parser.error("--min-selected must be >= 0")
+        if args.max_remove is not None and args.max_remove < 0:
+            parser.error("--max-remove must be >= 0")
+        try:
+            payload_raw = json.loads(Path(args.rulebook).read_text(encoding="utf-8"))
+        except Exception as exc:  # pragma: no cover - parser error path
+            parser.error(f"failed to parse rulebook from {args.rulebook!r}: {exc}")
+            return 2
+
+        if isinstance(payload_raw, list):
+            payload = {"rules": payload_raw}
+        elif isinstance(payload_raw, dict):
+            payload = payload_raw
+        else:
+            parser.error("rulebook JSON must be an object or a list of rule records.")
+            return 2
+
+        try:
+            stats = compute_rule_stats(payload, args.eventlog)
+            pruned, plan = prune_rulebook(
+                payload,
+                stats,
+                min_selected=int(args.min_selected),
+                min_impact=args.min_impact,
+                max_remove=args.max_remove,
+            )
+        except Exception as exc:  # pragma: no cover - parser error path
+            parser.error(str(exc))
+            return 2
+
+        removed = plan.get("removed_rule_ids", [])
+        kept = plan.get("kept_rule_ids", [])
+        print(
+            "rule-prune plan: "
+            f"removed={len(removed)} kept={len(kept)} "
+            f"removed_rule_ids={','.join(str(item) for item in removed) if removed else '(none)'}",
+            file=sys.stderr,
+        )
+        if not args.dry_run:
+            out_path = Path(args.out)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(json.dumps(pruned, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        print(json.dumps({"stats": stats, "plan": plan}, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
     if raw_argv and raw_argv[0] == "promote":
         parser = _build_promote_parser()
