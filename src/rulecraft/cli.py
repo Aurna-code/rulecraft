@@ -14,6 +14,7 @@ from .adapters.stub import StubAdapter
 from .analysis.flowmap import analyze_flowmap
 from .metrics.eventlog_metrics import summarize_jsonl
 from .orchestrator import Orchestrator
+from .policy.profile import load_profile
 from .runner.batch import run_batch
 from .rulebook.store import RulebookStore
 from .verifier.cache import SqliteVerifierCache
@@ -86,6 +87,7 @@ def _build_run_batch_parser() -> argparse.ArgumentParser:
     parser.add_argument("--top-m", type=int, default=2, help="How many top candidates to keep before synth.")
     parser.add_argument("--no-synth", action="store_true", help="Disable synth step and return best ranked candidate.")
     parser.add_argument("--verifier-cache", default=None, help="Optional sqlite path for verifier result cache.")
+    parser.add_argument("--policy-profile", default=None, help="Optional policy profile JSON path.")
     return parser
 
 
@@ -131,6 +133,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 rulebook_store = RulebookStore.load_from_json(args.rulebook)
             except Exception as exc:  # pragma: no cover - parser error path
                 parser.error(f"failed to load Rulebook from {args.rulebook!r}: {exc}")
+        policy_profile = None
+        if args.policy_profile:
+            try:
+                policy_profile = load_profile(args.policy_profile)
+            except Exception as exc:  # pragma: no cover - parser error path
+                parser.error(f"failed to load policy profile from {args.policy_profile!r}: {exc}")
 
         adapter = _build_batch_adapter(args.adapter)
         verifier_cache = SqliteVerifierCache(args.verifier_cache) if args.verifier_cache else None
@@ -151,6 +159,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             top_m=int(args.top_m),
             synth=not bool(args.no_synth),
             verifier_cache=verifier_cache,
+            policy_profile=policy_profile,
         )
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
         return 0

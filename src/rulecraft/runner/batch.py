@@ -12,6 +12,7 @@ from typing import Any, Iterator, Literal, Mapping
 from ..contracts import EventLog, pass_from
 from ..logging import append_event
 from ..policy.budget_router import BudgetState, should_attempt_repair
+from ..policy.profile import apply_overrides, match_bucket
 from ..policy.repair_loop import build_repair_prompt
 from ..policy.should_scale import ScaleTier, escalate_to_full, should_scale
 from ..rulebook.select import RuleSelectRequest, select_rules
@@ -377,6 +378,7 @@ def run_batch(
     top_m: int = 2,
     synth: bool = True,
     verifier_cache: VerifierCache | None = None,
+    policy_profile: Mapping[str, Any] | None = None,
 ) -> dict[str, int]:
     scale_mode = str(scale).lower()
     if scale_mode not in {"off", "auto", "probe", "full"}:
@@ -389,12 +391,43 @@ def run_batch(
     if int(top_m) < 1:
         raise ValueError("top_m must be >= 1")
 
+    default_task_policy = {
+        "max_attempts": int(max_attempts),
+        "scale": scale_mode,
+        "k_probe": int(k_probe),
+        "k_full": int(k_full),
+        "top_m": int(top_m),
+        "synth": bool(synth),
+        "budget_usd": budget_usd,
+        "budget_tokens": budget_tokens,
+    }
+
     summary = {"total": 0, "passed": 0, "failed": 0, "unknown": 0}
-    attempts_limit = max(int(max_attempts), 1) if repair else 1
 
     for task in _iter_tasks(tasks_path, limit):
         prompt = str(task["prompt"])
         mode = str(task["mode"])
+        task_bucket_key = task.get("bucket_key")
+        applied_policy_overrides = match_bucket(policy_profile, task_bucket_key if isinstance(task_bucket_key, str) else None)
+        effective_policy = apply_overrides(default_task_policy, applied_policy_overrides)
+        effective_max_attempts = _coerce_optional_int(effective_policy.get("max_attempts")) or int(max_attempts)
+        task_attempts_limit = max(effective_max_attempts, 1) if repair else 1
+        effective_scale_mode = str(effective_policy.get("scale", scale_mode))
+        if effective_scale_mode not in {"off", "auto", "probe", "full"}:
+            effective_scale_mode = scale_mode
+        effective_k_probe = _coerce_optional_int(effective_policy.get("k_probe")) or int(k_probe)
+        effective_k_full = _coerce_optional_int(effective_policy.get("k_full")) or int(k_full)
+        effective_top_m = _coerce_optional_int(effective_policy.get("top_m")) or int(top_m)
+        effective_synth = bool(effective_policy.get("synth", synth))
+        effective_budget_usd = _coerce_optional_float(effective_policy.get("budget_usd"))
+        effective_budget_tokens = _coerce_optional_int(effective_policy.get("budget_tokens"))
+        policy_summary = None
+        if policy_profile is not None:
+            policy_summary = {
+                "matched": bool(applied_policy_overrides),
+                "overrides": dict(applied_policy_overrides) if applied_policy_overrides else None,
+            }
+
         task_contract = task.get("contract")
         if isinstance(task_contract, Mapping):
             normalized_contract: dict[str, Any] | None = dict(task_contract)
@@ -419,11 +452,11 @@ def run_batch(
         final_verifier_result = None
         events_so_far: list[dict[str, Any]] = []
         budget_state = BudgetState(
-            max_attempts=attempts_limit,
+            max_attempts=task_attempts_limit,
             attempts_used=0,
-            budget_usd=budget_usd,
+            budget_usd=effective_budget_usd,
             spent_usd=0.0,
-            budget_tokens=budget_tokens,
+            budget_tokens=effective_budget_tokens,
             spent_tokens=0,
         )
 
@@ -441,12 +474,14 @@ def run_batch(
                 "task_id": task_id,
                 "attempt_idx": attempt_idx,
                 "phase": phase,
-                "max_attempts": attempts_limit,
+                "max_attempts": task_attempts_limit,
             }
             if verifier_cache_hit:
                 run_extra["verifier_cache_hit"] = True
             if contract_summary is not None:
                 run_extra["contract"] = dict(contract_summary)
+            if policy_summary is not None:
+                run_extra["policy"] = dict(policy_summary)
             if scale_meta is not None:
                 run_extra["scale"] = dict(scale_meta)
 
@@ -539,10 +574,10 @@ def run_batch(
                 attempt_instructions = repair_instructions or instructions
 
         task_passed = final_verifier_result is not None and _verifier_is_pass(final_verifier_result)
-        if not task_passed and scale_mode != "off":
+        if not task_passed and effective_scale_mode != "off":
             tier: ScaleTier
-            if scale_mode in {"probe", "full"}:
-                tier = scale_mode
+            if effective_scale_mode in {"probe", "full"}:
+                tier = effective_scale_mode
             else:
                 tier = should_scale(events_so_far, mode)
 
@@ -552,9 +587,9 @@ def run_batch(
                     primary_prompt,
                     mode,
                     adapter,
-                    k=int(k_probe),
-                    top_m=int(top_m),
-                    use_synth=bool(synth),
+                    k=effective_k_probe,
+                    top_m=effective_top_m,
+                    use_synth=effective_synth,
                     instructions=instructions,
                     selected_rules=selected_rules,
                     contract=normalized_contract,
@@ -592,9 +627,9 @@ def run_batch(
                     probe_cost_usd, _ = _event_cost_usage(probe_event)
                     projected_full_usd = estimate_full_cost_usd(
                         probe_cost_usd,
-                        k_probe=int(k_probe),
-                        k_full=int(k_full),
-                        used_synth=bool(synth),
+                        k_probe=effective_k_probe,
+                        k_full=effective_k_full,
+                        used_synth=effective_synth,
                     )
                     budget_ok_for_full = (budget_state.spent_usd + projected_full_usd) <= budget_state.budget_usd
 
@@ -604,9 +639,9 @@ def run_batch(
                         primary_prompt,
                         mode,
                         adapter,
-                        k=int(k_full),
-                        top_m=int(top_m),
-                        use_synth=bool(synth),
+                        k=effective_k_full,
+                        top_m=effective_top_m,
+                        use_synth=effective_synth,
                         instructions=instructions,
                         selected_rules=selected_rules,
                         contract=normalized_contract,
@@ -646,9 +681,9 @@ def run_batch(
                         primary_prompt,
                         mode,
                         adapter,
-                        k=int(k_full),
-                        top_m=int(top_m),
-                        use_synth=bool(synth),
+                        k=effective_k_full,
+                        top_m=effective_top_m,
+                        use_synth=effective_synth,
                         instructions=instructions,
                         selected_rules=selected_rules,
                         contract=normalized_contract,
