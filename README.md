@@ -141,6 +141,18 @@ The generated profile is conservative and bucket-aware:
 - Cap or disable costly low-yield full rollout paths.
 - Keep synth enabled for schema-heavy failure buckets.
 
+Suggest conservative rulebook entries from observed failure clusters:
+
+```bash
+python -m rulecraft rule-suggest \
+  --tasks examples/tasks/sample_tasks.jsonl \
+  --eventlog .rulecraft/eventlog.jsonl \
+  --out .rulecraft/suggested_rulebook.json \
+  --max-rules 20
+```
+
+`rule-suggest` focuses on format/schema compliance, contract restatement, and deterministic output guidance. Suggestions are conservative and avoid adding factual claims.
+
 ## Regression Packs and Promotion Gates
 
 Build a micro-regression pack from failure clusters and pass-task canaries:
@@ -152,6 +164,18 @@ python -m rulecraft regpack \
   --out .rulecraft/regpack.jsonl \
   --per-cluster 2 \
   --max-total 100
+```
+
+Expand regpack tasks with deterministic counterexample mutations:
+
+```bash
+python -m rulecraft regpack \
+  --tasks examples/tasks/sample_tasks.jsonl \
+  --eventlog .rulecraft/eventlog.jsonl \
+  --out .rulecraft/regpack_with_ce.jsonl \
+  --expand-counterexamples \
+  --counterexamples-per-cluster 2 \
+  --seed 1337
 ```
 
 Run promotion gate on baseline vs candidate policy profiles:
@@ -174,6 +198,25 @@ Promotion report highlights:
 - `deltas.schema_violation_rate`: candidate minus baseline schema violation rate.
 - `regressions`: threshold violations that fail the gate when `--fail-on-regression` is set.
 - `warnings`: non-fatal degradations to inspect.
+
+Run promotion gate on baseline vs candidate rulebooks:
+
+```bash
+python -m rulecraft promote-rules \
+  --tasks .rulecraft/regpack_with_ce.jsonl \
+  --adapter stub \
+  --baseline-rulebook rules/sample_rulebook.json \
+  --candidate-rulebook .rulecraft/suggested_rulebook.json \
+  --fail-on-regression \
+  --report .rulecraft/rule_promotion_report.json
+```
+
+Rule gate report highlights:
+
+- `deltas.task_pass_rate` and `deltas.strong_pass_rate`: candidate minus baseline task success deltas.
+- `deltas.schema_violation_rate` and `deltas.format_leak_rate`: quality and compliance regressions.
+- `top_worsened_clusters`: baseline top failure clusters that got worse in candidate runs.
+- `regressions`: hard threshold failures (with `--fail-on-regression`, CLI returns exit code `3`).
 
 ## Task Contracts and L3 Validation
 
