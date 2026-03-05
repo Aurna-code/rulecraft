@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Mapping
 
 from ..contracts import VerifierResult, pass_from
@@ -21,6 +23,26 @@ def _layer_payload(result: VerifierResult) -> dict[str, Any]:
 
 def _is_pass(result: VerifierResult) -> bool:
     return pass_from(result) == 1
+
+
+def _failure_cluster_id(
+    *,
+    mode: str,
+    contract: Mapping[str, Any] | None,
+    reason_codes: list[str] | None,
+    violated_constraints: list[str] | None,
+) -> str:
+    contract_type = contract.get("type") if isinstance(contract, Mapping) else None
+    schema_id = contract.get("schema_id") if isinstance(contract, Mapping) else None
+    tuple_payload = (
+        str(mode),
+        str(contract_type) if contract_type is not None else None,
+        str(schema_id) if schema_id is not None else None,
+        sorted(reason_codes or []),
+        sorted(violated_constraints or []),
+    )
+    digest = hashlib.sha1(json.dumps(tuple_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+    return f"fc_{digest[:12]}"
 
 
 def verify_output(mode: str, y_text: str, contract: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -51,6 +73,15 @@ def verify_output(mode: str, y_text: str, contract: Mapping[str, Any] | None) ->
 
     reason_codes = normalize_codes(overall.reason_codes)
     violated_constraints = normalize_codes(overall.violated_constraints)
+    if overall.verdict != "PASS" or overall.outcome != "OK":
+        failure_cluster_id: str | None = _failure_cluster_id(
+            mode=mode,
+            contract=contract,
+            reason_codes=reason_codes,
+            violated_constraints=violated_constraints,
+        )
+    else:
+        failure_cluster_id = None
     return {
         "verifier_id": verifier_id,
         "verdict": overall.verdict,
@@ -58,6 +89,7 @@ def verify_output(mode: str, y_text: str, contract: Mapping[str, Any] | None) ->
         "reason_codes": reason_codes,
         "violated_constraints": violated_constraints,
         "pass": pass_from(overall),
+        "failure_cluster_id": failure_cluster_id,
         "layers": layers,
     }
 

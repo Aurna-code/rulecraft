@@ -59,6 +59,8 @@ class _RunningStats:
         self.counts_by_verdict: Counter[str] = Counter()
         self.counts_by_outcome: Counter[str] = Counter()
         self.reason_counts: Counter[str] = Counter()
+        self.failure_cluster_counts: Counter[str] = Counter()
+        self.failure_cluster_samples: dict[str, dict[str, Any]] = {}
         self.latencies: list[int] = []
         self.tokens_in_total = 0
         self.tokens_out_total = 0
@@ -120,12 +122,26 @@ class _RunningStats:
                 self.format_leak_count += 1
             if SCHEMA_VIOLATION in normalized_codes or "schema_violation" in normalized_codes:
                 self.schema_violation_count += 1
+        else:
+            normalized_codes = []
 
         violated_constraints = verifier.get("violated_constraints") if isinstance(verifier, dict) else None
-        if isinstance(violated_constraints, list) and any(
-            isinstance(constraint, str) and constraint for constraint in violated_constraints
-        ):
+        if isinstance(violated_constraints, list):
+            normalized_constraints = [item for item in violated_constraints if isinstance(item, str) and item]
+        else:
+            normalized_constraints = []
+
+        if normalized_constraints:
             self.l1_violation_count += 1
+
+        failure_cluster_id = verifier.get("failure_cluster_id") if isinstance(verifier, dict) else None
+        if isinstance(failure_cluster_id, str) and failure_cluster_id:
+            self.failure_cluster_counts[failure_cluster_id] += 1
+            if failure_cluster_id not in self.failure_cluster_samples:
+                self.failure_cluster_samples[failure_cluster_id] = {
+                    "sample_reason_codes": list(normalized_codes) if normalized_codes else None,
+                    "sample_constraints": list(normalized_constraints) if normalized_constraints else None,
+                }
 
         cost = event.get("cost", {})
         if not isinstance(cost, dict):
@@ -154,6 +170,17 @@ class _RunningStats:
     def to_dict(self) -> dict[str, Any]:
         task_count_for_scale = len(self._task_ids)
         top_reason_codes = [{"code": code, "count": count} for code, count in self.reason_counts.most_common(10)]
+        top_failure_clusters = []
+        for cluster_id, count in self.failure_cluster_counts.most_common(10):
+            sample = self.failure_cluster_samples.get(cluster_id, {})
+            top_failure_clusters.append(
+                {
+                    "cluster_id": cluster_id,
+                    "count": count,
+                    "sample_reason_codes": sample.get("sample_reason_codes"),
+                    "sample_constraints": sample.get("sample_constraints"),
+                }
+            )
         return {
             "total_events": self.total_events,
             "pass_rate": _safe_rate(self.pass_count, self.total_events),
@@ -167,6 +194,7 @@ class _RunningStats:
             "counts_by_verdict": dict(self.counts_by_verdict),
             "counts_by_outcome": dict(self.counts_by_outcome),
             "top_reason_codes": top_reason_codes,
+            "top_failure_clusters": top_failure_clusters,
             "latency_ms_p50": _percentile(self.latencies, 50),
             "latency_ms_p95": _percentile(self.latencies, 95),
             "tokens_in_total": self.tokens_in_total,

@@ -336,3 +336,64 @@ def test_metrics_include_schema_violation_rate(tmp_path: Path) -> None:
 
     summary = summarize_jsonl(eventlog_path)
     assert summary["schema_violation_rate"] == pytest.approx(0.5)
+
+
+def test_metrics_include_top_failure_clusters(tmp_path: Path) -> None:
+    eventlog_path = tmp_path / "eventlog_failure_clusters.jsonl"
+    _write_jsonl(
+        eventlog_path,
+        [
+            {
+                "trace_id": "fc1",
+                "x_ref": "x-fc1",
+                "bucket_key": "support",
+                "selected_rules": [],
+                "verifier": {
+                    "verdict": "FAIL",
+                    "outcome": "FAIL",
+                    "failure_cluster_id": "fc_same",
+                    "reason_codes": ["SCHEMA_VIOLATION"],
+                    "violated_constraints": ["SCHEMA:JSONSCHEMA:$.count:type"],
+                },
+                "cost": {"meta": {"backend": "stub", "model": "stub", "cost_usd": 0.0, "error": None}},
+            },
+            {
+                "trace_id": "fc2",
+                "x_ref": "x-fc2",
+                "bucket_key": "support",
+                "selected_rules": [],
+                "verifier": {
+                    "verdict": "FAIL",
+                    "outcome": "FAIL",
+                    "failure_cluster_id": "fc_same",
+                    "reason_codes": ["SCHEMA_VIOLATION"],
+                    "violated_constraints": ["SCHEMA:JSONSCHEMA:$.count:type"],
+                },
+                "cost": {"meta": {"backend": "stub", "model": "stub", "cost_usd": 0.0, "error": None}},
+            },
+            {
+                "trace_id": "fc3",
+                "x_ref": "x-fc3",
+                "bucket_key": "sales",
+                "selected_rules": [],
+                "verifier": {
+                    "verdict": "FAIL",
+                    "outcome": "UNKNOWN",
+                    "failure_cluster_id": "fc_other",
+                    "reason_codes": ["FORMAT_LEAK", "JSON_PARSE"],
+                    "violated_constraints": ["FORMAT:JSON_PARSE"],
+                },
+                "cost": {"meta": {"backend": "stub", "model": "stub", "cost_usd": 0.0, "error": None}},
+            },
+        ],
+    )
+
+    summary = summarize_jsonl(eventlog_path)
+    assert summary["top_failure_clusters"][0]["cluster_id"] == "fc_same"
+    assert summary["top_failure_clusters"][0]["count"] == 2
+    assert summary["top_failure_clusters"][1]["cluster_id"] == "fc_other"
+
+    grouped = summarize_jsonl(eventlog_path, group_by="bucket_key")
+    assert grouped["overall"]["top_failure_clusters"][0]["cluster_id"] == "fc_same"
+    assert grouped["by_bucket_key"]["support"]["top_failure_clusters"][0]["cluster_id"] == "fc_same"
+    assert grouped["by_bucket_key"]["sales"]["top_failure_clusters"][0]["cluster_id"] == "fc_other"
