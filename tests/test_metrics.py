@@ -305,3 +305,34 @@ def test_metrics_include_scaling_rates(tmp_path: Path) -> None:
     assert summary["scale_probe_rate"] == pytest.approx(2 / 3)
     assert summary["scale_full_rate"] == pytest.approx(1 / 3)
     assert summary["synth_rate"] == pytest.approx(2 / 3)
+
+
+def test_metrics_include_schema_violation_rate(tmp_path: Path) -> None:
+    eventlog_path = tmp_path / "eventlog_schema_violation.jsonl"
+    _write_jsonl(
+        eventlog_path,
+        [
+            {
+                "trace_id": "sv1",
+                "x_ref": "x-sv1",
+                "selected_rules": [],
+                "verifier": {
+                    "verdict": "FAIL",
+                    "outcome": "FAIL",
+                    "reason_codes": ["schema_violation"],
+                    "violated_constraints": ["jsonschema:$.count:type"],
+                },
+                "cost": {"meta": {"backend": "stub", "model": "stub", "cost_usd": 0.0, "error": None}},
+            },
+            {
+                "trace_id": "sv2",
+                "x_ref": "x-sv2",
+                "selected_rules": [],
+                "verifier": {"verdict": "PASS", "outcome": "OK"},
+                "cost": {"meta": {"backend": "stub", "model": "stub", "cost_usd": 0.0, "error": None}},
+            },
+        ],
+    )
+
+    summary = summarize_jsonl(eventlog_path)
+    assert summary["schema_violation_rate"] == pytest.approx(0.5)

@@ -192,3 +192,38 @@ def test_run_batch_rulebook_selects_and_injects_context(tmp_path: Path) -> None:
     assert payload["selected_rules"]
     for rule in payload["selected_rules"]:
         assert set(rule.keys()) == {"rule_id", "version", "type"}
+
+
+def test_run_batch_contract_tasks_enforce_jsonschema_and_log_contract_summary(tmp_path: Path) -> None:
+    out_path = tmp_path / "out_contract_tasks.jsonl"
+    adapter = ScriptedAdapter(
+        scripts={
+            "contract-json-1": ['{"status":"ok","count":"1"}'],
+            "contract-json-2": ['{"status":"ok","tags":["a","b"]}'],
+            "json-no-contract": ['{"status":"ok"}'],
+            "text-summary": ["One short summary sentence."],
+        }
+    )
+
+    summary = run_batch(
+        tasks_path=ROOT / "examples" / "tasks" / "contract_tasks.jsonl",
+        adapter=adapter,
+        out_path=out_path,
+    )
+    assert summary == {"total": 4, "passed": 3, "failed": 1, "unknown": 0}
+
+    lines = out_path.read_text(encoding="utf-8").strip().splitlines()
+    events = [json.loads(line) for line in lines]
+    by_task = {event["run"]["task_id"]: event for event in events}
+
+    failing = by_task["contract-json-1"]
+    assert failing["verifier"]["verdict"] == "FAIL"
+    assert failing["verifier"]["outcome"] == "FAIL"
+    assert "schema_violation" in (failing["verifier"]["reason_codes"] or [])
+    assert failing["verifier"]["layers"]["l1"]["verdict"] == "PASS"
+    assert failing["verifier"]["layers"]["l3"]["verdict"] == "FAIL"
+    assert failing["run"]["extra"]["contract"] == {
+        "type": "jsonschema",
+        "schema_id": "contract.status_count.v1",
+        "has_schema": True,
+    }

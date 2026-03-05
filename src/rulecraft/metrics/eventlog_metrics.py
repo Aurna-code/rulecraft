@@ -51,6 +51,7 @@ class _RunningStats:
         self.unknown_count = 0
         self.l1_violation_count = 0
         self.format_leak_count = 0
+        self.schema_violation_count = 0
         self.fail_count = 0
         self.partial_count = 0
         self.error_count = 0
@@ -116,6 +117,8 @@ class _RunningStats:
             self.reason_counts.update(normalized_codes)
             if "format_leak" in normalized_codes:
                 self.format_leak_count += 1
+            if "schema_violation" in normalized_codes:
+                self.schema_violation_count += 1
 
         violated_constraints = verifier.get("violated_constraints") if isinstance(verifier, dict) else None
         if isinstance(violated_constraints, list) and any(
@@ -156,6 +159,7 @@ class _RunningStats:
             "unknown_rate": _safe_rate(self.unknown_count, self.total_events),
             "l1_violation_rate": _safe_rate(self.l1_violation_count, self.total_events),
             "format_leak_rate": _safe_rate(self.format_leak_count, self.total_events),
+            "schema_violation_rate": _safe_rate(self.schema_violation_count, self.total_events),
             "fail_rate": _safe_rate(self.fail_count, self.total_events),
             "partial_rate": _safe_rate(self.partial_count, self.total_events),
             "error_rate": _safe_rate(self.error_count, self.total_events),

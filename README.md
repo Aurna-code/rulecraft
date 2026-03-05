@@ -108,6 +108,39 @@ python -m rulecraft run-batch \
 
 Scaling defaults are conservative: `--scale off` unless explicitly enabled. Budget ceilings still cap escalation from probe to full.
 
+## Task Contracts and L3 Validation
+
+Task JSONL rows can include an optional `contract` object:
+
+```json
+{
+  "task_id": "contract-json-1",
+  "prompt": "Return JSON with status and count.",
+  "mode": "json",
+  "contract": {
+    "type": "jsonschema",
+    "schema_id": "contract.status_count.v1",
+    "schema": {
+      "type": "object",
+      "required": ["status", "count"],
+      "properties": {
+        "status": {"type": "string"},
+        "count": {"type": "integer"}
+      },
+      "additionalProperties": false
+    }
+  }
+}
+```
+
+Verification behavior:
+
+- L1 still checks parse/format.
+- For `mode=json` with `contract.type=jsonschema`, L3 validates against the schema.
+- Parseable JSON that violates schema is `FAIL/FAIL` (not `PASS`).
+
+Event logs keep contract metadata only (`type`, `schema_id`, `has_schema`) under `run.extra.contract`. Full schemas are not stored in EventLog lines.
+
 Run with rulebook selection and injection:
 
 ```bash
@@ -122,6 +155,12 @@ Run the example wrapper script:
 
 ```bash
 python examples/minimal_batch_run.py
+```
+
+Run the contract-focused batch example:
+
+```bash
+python examples/minimal_contract_batch_run.py
 ```
 
 Run a batch with OpenAI Responses API:
