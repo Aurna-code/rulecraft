@@ -43,7 +43,7 @@ def _event_reason_codes(event: Mapping[str, Any]) -> list[str]:
     return [code for code in reason_codes if isinstance(code, str) and code]
 
 
-def _event_is_pass(event: Mapping[str, Any]) -> bool:
+def is_pass(event: Mapping[str, Any]) -> bool:
     verifier = _event_verifier(event)
 
     pass_value = verifier.get("pass")
@@ -55,6 +55,13 @@ def _event_is_pass(event: Mapping[str, Any]) -> bool:
     return verdict == "PASS" and outcome != "FAIL"
 
 
+def is_strong_pass(event: Mapping[str, Any]) -> bool:
+    verifier = _event_verifier(event)
+    verdict = verifier.get("verdict")
+    outcome = verifier.get("outcome")
+    return verdict == "PASS" and outcome == "OK"
+
+
 def should_scale(events_so_far: list[dict[str, Any]], mode: str) -> ScaleTier:
     """Return a deterministic scaling tier for the current task state."""
     del mode  # Reserved for future mode-specific policy tuning.
@@ -62,7 +69,7 @@ def should_scale(events_so_far: list[dict[str, Any]], mode: str) -> ScaleTier:
     if not events_so_far:
         return "off"
 
-    if any(_event_is_pass(event) for event in events_so_far):
+    if any(is_pass(event) for event in events_so_far):
         return "off"
 
     latest = events_so_far[-1]
@@ -81,10 +88,9 @@ def should_scale(events_so_far: list[dict[str, Any]], mode: str) -> ScaleTier:
 
 
 def escalate_to_full(probe_event: dict[str, Any], budget_ok: bool) -> bool:
-    """Escalate from probe to full only for non-pass probe results with budget headroom."""
+    """Escalate from probe to full when probe is not a strong pass and budget allows."""
     if not budget_ok:
         return False
-    return not _event_is_pass(probe_event)
+    return not is_strong_pass(probe_event)
 
-
-__all__ = ["ScaleTier", "should_scale", "escalate_to_full"]
+__all__ = ["ScaleTier", "is_pass", "is_strong_pass", "should_scale", "escalate_to_full"]

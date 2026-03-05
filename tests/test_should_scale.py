@@ -7,7 +7,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from rulecraft.policy.should_scale import escalate_to_full, should_scale
+from rulecraft.policy.should_scale import escalate_to_full, is_pass, is_strong_pass, should_scale
 
 
 def _event(
@@ -40,6 +40,15 @@ def test_should_scale_returns_off_if_any_attempt_passed() -> None:
     assert should_scale(events, mode="json") == "off"
 
 
+def test_is_pass_and_is_strong_pass_distinguish_pass_unknown() -> None:
+    pass_unknown = _event(verdict="PASS", outcome="UNKNOWN", pass_value=1)
+    pass_ok = _event(verdict="PASS", outcome="OK")
+
+    assert is_pass(pass_unknown) is True
+    assert is_strong_pass(pass_unknown) is False
+    assert is_strong_pass(pass_ok) is True
+
+
 def test_should_scale_returns_off_for_format_leak_failures() -> None:
     events = [_event(verdict="FAIL", outcome="UNKNOWN", reason_codes=["format_leak"])]
     assert should_scale(events, mode="json") == "off"
@@ -66,10 +75,12 @@ def test_should_scale_is_deterministic() -> None:
     assert should_scale(events, mode="text") == "off"
 
 
-def test_escalate_to_full_requires_non_pass_probe_and_budget() -> None:
-    passing_probe = _event(verdict="PASS", outcome="OK")
+def test_escalate_to_full_uses_strong_pass_gate() -> None:
+    strong_probe = _event(verdict="PASS", outcome="OK")
+    weak_probe = _event(verdict="PASS", outcome="UNKNOWN", pass_value=1)
     failing_probe = _event(verdict="FAIL", outcome="UNKNOWN")
 
-    assert escalate_to_full(passing_probe, budget_ok=True) is False
+    assert escalate_to_full(strong_probe, budget_ok=True) is False
+    assert escalate_to_full(weak_probe, budget_ok=True) is True
     assert escalate_to_full(failing_probe, budget_ok=False) is False
     assert escalate_to_full(failing_probe, budget_ok=True) is True
