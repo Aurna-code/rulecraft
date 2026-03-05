@@ -116,6 +116,44 @@ class TapeReplayMissError(RuntimeError):
     """Raised when replay lookup misses the request hash."""
 
 
+def _coerce_response(response: Any) -> tuple[str, dict[str, Any]] | None:
+    if not isinstance(response, tuple) or len(response) != 2:
+        return None
+    text, meta = response
+    if not isinstance(meta, Mapping):
+        return str(text), {}
+    return str(text), dict(meta)
+
+
+def _generate_with_fallback(adapter: Any, prompt: str, kwargs: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+    request_kwargs = dict(kwargs)
+    response = None
+
+    try:
+        response = adapter.generate(prompt, **request_kwargs)
+    except TypeError:
+        response = None
+
+    coerced = _coerce_response(response)
+    if coerced is not None:
+        return coerced
+
+    if "instructions" in request_kwargs:
+        try:
+            response = adapter.generate(prompt, instructions=request_kwargs.get("instructions"))
+        except TypeError:
+            response = None
+        coerced = _coerce_response(response)
+        if coerced is not None:
+            return coerced
+
+    response = adapter.generate(prompt)
+    coerced = _coerce_response(response)
+    if coerced is not None:
+        return coerced
+    raise RuntimeError("Adapter generate() must return (text, meta).")
+
+
 class TapeRecorderAdapter:
     """Wrap an adapter and append generate calls to a tape file."""
 
@@ -126,8 +164,7 @@ class TapeRecorderAdapter:
 
     def generate(self, prompt: str, **kwargs: Any) -> tuple[str, dict[str, Any]]:
         request, request_hash = _request_from_generate(prompt, kwargs, self.backend_name)
-        text, meta = self.adapter.generate(prompt, **kwargs)
-        normalized_meta = dict(meta) if isinstance(meta, Mapping) else {}
+        text, normalized_meta = _generate_with_fallback(self.adapter, prompt, kwargs)
         line = {
             "tape_version": TAPE_VERSION,
             "ts_utc": _utc_now_iso(),

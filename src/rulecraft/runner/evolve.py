@@ -9,6 +9,7 @@ from typing import Any, Mapping
 from ..adapters.openai_adapter import OpenAIAdapter
 from ..adapters.scripted import ScriptedAdapter
 from ..adapters.stub import StubAdapter
+from ..adapters.tape import TapeRecorderAdapter, TapeReplayAdapter
 from ..analysis.flowmap import analyze_flowmap
 from ..analysis.regpack import build_regpack
 from ..metrics.eventlog_metrics import summarize_jsonl
@@ -49,15 +50,41 @@ def _adapter_script_config(scripted: Mapping[str, Any] | None, label: str) -> di
     return config
 
 
-def _adapter_factory(adapter: str, scripted: Mapping[str, Any] | None = None):
+def _adapter_factory(
+    adapter: str,
+    scripted: Mapping[str, Any] | None = None,
+    *,
+    tape_in: str | None = None,
+    tape_out: str | None = None,
+):
     adapter_name = str(adapter).lower()
-    if adapter_name == "stub":
-        return lambda _label: StubAdapter(mode="text")
-    if adapter_name == "openai":
-        return lambda _label: OpenAIAdapter()
-    if adapter_name == "scripted":
-        return lambda label: ScriptedAdapter(**_adapter_script_config(scripted, label))
-    raise ValueError(f"Unsupported adapter: {adapter!r}")
+
+    def _base_adapter(label: str) -> Any:
+        if tape_in is not None:
+            return TapeReplayAdapter(tape_in)
+        if adapter_name == "stub":
+            return StubAdapter(mode="text")
+        if adapter_name == "openai":
+            return OpenAIAdapter()
+        if adapter_name == "scripted":
+            return ScriptedAdapter(**_adapter_script_config(scripted, label))
+        if adapter_name == "tape":
+            raise ValueError("Adapter 'tape' requires tape_in.")
+        raise ValueError(f"Unsupported adapter: {adapter!r}")
+
+    def _wrapped(label: str) -> Any:
+        base = _base_adapter(label)
+        if tape_out is None:
+            return base
+        if tape_in is not None:
+            backend_name = "tape_replay"
+        elif adapter_name == "scripted":
+            backend_name = "scripted"
+        else:
+            backend_name = adapter_name
+        return TapeRecorderAdapter(base, tape_path=tape_out, backend_name=backend_name)
+
+    return _wrapped
 
 
 def _baseline_policy_profile(path: str | None) -> dict[str, Any]:
@@ -72,6 +99,15 @@ def _json_safe(value: Any) -> Any:
     except TypeError:
         return None
     return value
+
+
+def _resolve_optional_path(path: str | None, *, base_dir: Path | None = None) -> str | None:
+    if path is None:
+        return None
+    target = Path(path)
+    if not target.is_absolute() and base_dir is not None:
+        target = base_dir / target
+    return str(target.resolve())
 
 
 def _baseline_rulebook_path(path: str | None, outdir: Path) -> str:
@@ -116,6 +152,8 @@ def run_evolve(
     scale: str = "off",
     repair: bool = False,
     max_attempts: int = 1,
+    tape_out: str | None = None,
+    tape_in: str | None = None,
     expand_counterexamples: bool = False,
     seed: int = 1337,
     fail_on_regression: bool = False,
@@ -138,6 +176,8 @@ def run_evolve(
     tasks_path_resolved = str(Path(tasks_path).resolve())
     baseline_policy_resolved = str(Path(baseline_policy_profile_path).resolve()) if baseline_policy_profile_path else None
     baseline_rulebook_resolved = str(Path(baseline_rulebook_path).resolve()) if baseline_rulebook_path else None
+    tape_out_resolved = _resolve_optional_path(tape_out, base_dir=outdir_path)
+    tape_in_resolved = _resolve_optional_path(tape_in)
 
     outputs = dict(DEFAULT_OUTPUT_FILENAMES)
     output_paths = {key: outdir_path / rel_path for key, rel_path in outputs.items()}
@@ -151,6 +191,8 @@ def run_evolve(
         "instructions": instructions,
         "repair": bool(repair),
         "max_attempts": int(max_attempts),
+        "tape_out": tape_out_resolved,
+        "tape_in": tape_in_resolved,
         "scale": str(scale),
         "k_probe": int(k_probe),
         "k_full": int(k_full),
@@ -191,7 +233,12 @@ def run_evolve(
         manifest["params"]["scripted_adapter"] = _json_safe(scripted_adapter)
     write_manifest(outdir_path / "manifest.json", manifest)
 
-    adapter_for = _adapter_factory(adapter, scripted_adapter)
+    adapter_for = _adapter_factory(
+        adapter,
+        scripted_adapter,
+        tape_in=tape_in_resolved,
+        tape_out=tape_out_resolved,
+    )
     baseline_policy = _baseline_policy_profile(baseline_policy_resolved)
     baseline_rulebook_for_gate = _baseline_rulebook_path(baseline_rulebook_resolved, outdir_path)
     baseline_rulebook_store = (

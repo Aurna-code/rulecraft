@@ -139,6 +139,67 @@ def test_run_batch_cli_openai_requires_api_key(
     assert "OPENAI_API_KEY is not set" in capsys.readouterr().out
 
 
+def test_run_batch_cli_tape_record_and_replay(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    tasks_path = tmp_path / "tasks_tape.jsonl"
+    record_out_path = tmp_path / "out_record.jsonl"
+    replay_out_path = tmp_path / "out_replay.jsonl"
+    replay_auto_out_path = tmp_path / "out_replay_auto.jsonl"
+    tape_path = tmp_path / "adapter.tape.jsonl"
+    _write_tasks(tasks_path)
+
+    record_exit = main(
+        [
+            "run-batch",
+            "--tasks",
+            str(tasks_path),
+            "--adapter",
+            "stub",
+            "--out",
+            str(record_out_path),
+            "--tape-out",
+            str(tape_path),
+        ]
+    )
+    assert record_exit == 0
+    record_summary = json.loads(capsys.readouterr().out)
+    assert tape_path.exists()
+    assert tape_path.read_text(encoding="utf-8").strip()
+
+    replay_exit = main(
+        [
+            "run-batch",
+            "--tasks",
+            str(tasks_path),
+            "--adapter",
+            "tape",
+            "--tape-in",
+            str(tape_path),
+            "--out",
+            str(replay_out_path),
+        ]
+    )
+    assert replay_exit == 0
+    replay_summary = json.loads(capsys.readouterr().out)
+    assert replay_summary == record_summary
+
+    replay_auto_exit = main(
+        [
+            "run-batch",
+            "--tasks",
+            str(tasks_path),
+            "--adapter",
+            "stub",
+            "--tape-in",
+            str(tape_path),
+            "--out",
+            str(replay_auto_out_path),
+        ]
+    )
+    assert replay_auto_exit == 0
+    replay_auto_summary = json.loads(capsys.readouterr().out)
+    assert replay_auto_summary == record_summary
+
+
 def test_run_batch_budget_router_can_stop_repair_attempts(tmp_path: Path) -> None:
     tasks_path = tmp_path / "tasks_budget.jsonl"
     out_path = tmp_path / "out_budget.jsonl"

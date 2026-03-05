@@ -41,7 +41,11 @@ def _as_str_or_none(value: Any) -> str | None:
     return None
 
 
-def run_replay(manifest_path: str, outdir: str | None = None) -> dict[str, Any]:
+def run_replay(
+    manifest_path: str,
+    outdir: str | None = None,
+    tape_in: str | None = None,
+) -> dict[str, Any]:
     """Replay an evolve run from a manifest."""
     manifest_target = Path(manifest_path).resolve()
     manifest = load_manifest(manifest_target)
@@ -64,7 +68,7 @@ def run_replay(manifest_path: str, outdir: str | None = None) -> dict[str, Any]:
     if not isinstance(promote_rules_params, Mapping):
         promote_rules_params = {}
 
-    adapter = str(params.get("adapter", "stub"))
+    adapter = "tape" if tape_in is not None else str(params.get("adapter", "stub"))
     replay_outdir = Path(outdir).resolve() if outdir is not None else manifest_target.parent / "replay"
     scripted_adapter = params.get("scripted_adapter")
     if not isinstance(scripted_adapter, Mapping):
@@ -88,6 +92,7 @@ def run_replay(manifest_path: str, outdir: str | None = None) -> dict[str, Any]:
         scale=str(run_batch_params.get("scale", "off")),
         repair=_as_bool(run_batch_params.get("repair"), False),
         max_attempts=_as_int(run_batch_params.get("max_attempts"), 1),
+        tape_in=tape_in,
         expand_counterexamples=_as_bool(regpack_params.get("expand_counterexamples"), False),
         seed=seed,
         fail_on_regression=fail_on_regression,

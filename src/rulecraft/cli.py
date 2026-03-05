@@ -12,6 +12,7 @@ from typing import Any, Sequence
 from .adapters.dummy import DummyAdapter
 from .adapters.openai_adapter import OpenAIAdapter
 from .adapters.stub import StubAdapter
+from .adapters.tape import TapeRecorderAdapter, TapeReplayAdapter
 from .analysis.diff_runs import diff_runs
 from .analysis.flowmap import analyze_flowmap
 from .analysis.regpack import build_regpack
@@ -80,10 +81,12 @@ def _build_flowmap_parser() -> argparse.ArgumentParser:
 def _build_run_batch_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run batch tasks and append canonical EventLog records.")
     parser.add_argument("--tasks", required=True, help="Task JSONL path.")
-    parser.add_argument("--adapter", choices=("stub", "openai"), default="stub", help="Batch adapter backend.")
+    parser.add_argument("--adapter", choices=("stub", "openai", "tape"), default="stub", help="Batch adapter backend.")
     parser.add_argument("--out", default=".rulecraft/eventlog.jsonl", help="EventLog JSONL output path.")
     parser.add_argument("--limit", type=int, default=None, help="Optional maximum number of tasks to execute.")
     parser.add_argument("--instructions", default=None, help="Optional adapter instructions.")
+    parser.add_argument("--tape-out", default=None, help="Optional adapter tape JSONL output path (record mode).")
+    parser.add_argument("--tape-in", default=None, help="Optional adapter tape JSONL input path (replay mode).")
     parser.add_argument("--repair", action="store_true", help="Enable repair attempts for failed tasks.")
     parser.add_argument("--max-attempts", type=int, default=1, help="Maximum attempts per task including primary.")
     parser.add_argument("--budget-usd", type=float, default=None, help="Optional per-task budget ceiling in USD.")
@@ -181,6 +184,7 @@ def _build_evolve_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--repair", action="store_true", help="Enable repair attempts in baseline run-batch.")
     parser.add_argument("--max-attempts", type=int, default=1, help="Maximum attempts per task including primary.")
+    parser.add_argument("--tape-out", default=None, help="Optional adapter tape JSONL output path (record mode).")
     parser.add_argument("--expand-counterexamples", action="store_true", help="Enable regpack counterexample expansion.")
     parser.add_argument("--seed", type=int, default=1337, help="Deterministic seed used for generated artifacts.")
     parser.add_argument("--fail-on-regression", action="store_true", help="Return exit code 1 if any promotion gate fails.")
@@ -191,6 +195,7 @@ def _build_replay_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Replay an evolve pipeline from a saved manifest.")
     parser.add_argument("--manifest", required=True, help="Path to evolve manifest JSON.")
     parser.add_argument("--outdir", default=None, help="Optional output directory for replay artifacts.")
+    parser.add_argument("--tape-in", default=None, help="Optional adapter tape JSONL input path (replay mode).")
     return parser
 
 
@@ -234,12 +239,39 @@ def _build_rule_prune_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _build_batch_adapter(adapter_spec: str) -> Any:
-    if adapter_spec == "stub":
-        return StubAdapter(mode="text")
-    if adapter_spec == "openai":
-        return OpenAIAdapter()
-    raise ValueError(f"Unsupported batch adapter: {adapter_spec!r}")
+def _build_batch_adapter(
+    adapter_spec: str,
+    *,
+    tape_in: str | None = None,
+    tape_out: str | None = None,
+) -> Any:
+    adapter_name = str(adapter_spec).lower()
+
+    if tape_in:
+        if adapter_name == "tape":
+            adapter: Any = TapeReplayAdapter(tape_in)
+            backend_name = "tape"
+        elif adapter_name in {"stub", "openai"}:
+            adapter = TapeReplayAdapter(tape_in)
+            backend_name = f"{adapter_name}_replay"
+        else:
+            raise ValueError(f"Unsupported batch adapter: {adapter_spec!r}")
+    else:
+        if adapter_name == "stub":
+            adapter = StubAdapter(mode="text")
+            backend_name = "stub"
+        elif adapter_name == "openai":
+            adapter = OpenAIAdapter()
+            backend_name = "openai"
+        elif adapter_name == "tape":
+            raise ValueError("--adapter tape requires --tape-in.")
+        else:
+            raise ValueError(f"Unsupported batch adapter: {adapter_spec!r}")
+
+    if tape_out:
+        adapter = TapeRecorderAdapter(adapter, tape_path=tape_out, backend_name=backend_name)
+
+    return adapter
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -254,7 +286,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser = _build_run_batch_parser()
         args = parser.parse_args(raw_argv[1:])
 
-        if args.adapter == "openai" and not os.getenv("OPENAI_API_KEY"):
+        if args.adapter == "tape" and not args.tape_in:
+            parser.error("--adapter tape requires --tape-in")
+
+        if args.adapter == "openai" and not args.tape_in and not os.getenv("OPENAI_API_KEY"):
             print("OPENAI_API_KEY is not set. Skipping OpenAI batch run.")
             return 2
 
@@ -283,7 +318,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             except Exception as exc:  # pragma: no cover - parser error path
                 parser.error(f"failed to load policy profile from {args.policy_profile!r}: {exc}")
 
-        adapter = _build_batch_adapter(args.adapter)
+        adapter = _build_batch_adapter(args.adapter, tape_in=args.tape_in, tape_out=args.tape_out)
         verifier_cache = SqliteVerifierCache(args.verifier_cache) if args.verifier_cache else None
         summary = run_batch(
             tasks_path=args.tasks,
@@ -537,6 +572,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             scale=args.scale,
             repair=bool(args.repair),
             max_attempts=int(args.max_attempts),
+            tape_out=args.tape_out,
             expand_counterexamples=bool(args.expand_counterexamples),
             seed=int(args.seed),
             fail_on_regression=bool(args.fail_on_regression),
@@ -552,11 +588,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         manifest = load_manifest(args.manifest)
         params = manifest.get("params") if isinstance(manifest, dict) else None
         adapter_name = params.get("adapter") if isinstance(params, dict) else None
-        if adapter_name == "openai" and not os.getenv("OPENAI_API_KEY"):
+        if adapter_name == "openai" and not args.tape_in and not os.getenv("OPENAI_API_KEY"):
             print("OPENAI_API_KEY is not set. Skipping OpenAI replay run.")
             return 2
 
-        summary = run_replay(manifest_path=args.manifest, outdir=args.outdir)
+        summary = run_replay(manifest_path=args.manifest, outdir=args.outdir, tape_in=args.tape_in)
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
     if raw_argv and raw_argv[0] == "diff-runs":
