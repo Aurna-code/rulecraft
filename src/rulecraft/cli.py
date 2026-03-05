@@ -13,6 +13,7 @@ from .adapters.dummy import DummyAdapter
 from .adapters.openai_adapter import OpenAIAdapter
 from .adapters.stub import StubAdapter
 from .analysis.flowmap import analyze_flowmap
+from .analysis.regpack import build_regpack
 from .metrics.eventlog_metrics import summarize_jsonl
 from .orchestrator import Orchestrator
 from .policy.profile import load_profile
@@ -101,6 +102,16 @@ def _build_suggest_policy_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _build_regpack_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Build a micro-regression pack from tasks and EventLog clusters.")
+    parser.add_argument("--tasks", required=True, help="Tasks JSONL source of truth.")
+    parser.add_argument("--eventlog", required=True, help="EventLog JSONL with failure clusters and pass outcomes.")
+    parser.add_argument("--out", required=True, help="Output regpack JSONL path.")
+    parser.add_argument("--per-cluster", type=int, default=2, help="Maximum unique tasks sampled per failure cluster.")
+    parser.add_argument("--max-total", type=int, default=100, help="Hard cap on total sampled tasks.")
+    return parser
+
+
 def _build_batch_adapter(adapter_spec: str) -> Any:
     if adapter_spec == "stub":
         return StubAdapter(mode="text")
@@ -184,6 +195,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"Suggested policy profile with {len(profile.get('rules', []))} bucket rule(s) from {args.path}.",
             file=sys.stderr,
         )
+        return 0
+    if raw_argv and raw_argv[0] == "regpack":
+        parser = _build_regpack_parser()
+        args = parser.parse_args(raw_argv[1:])
+        if args.per_cluster < 1:
+            parser.error("--per-cluster must be >= 1")
+        if args.max_total < 1:
+            parser.error("--max-total must be >= 1")
+
+        summary = build_regpack(
+            tasks_path=args.tasks,
+            eventlog_path=args.eventlog,
+            out_path=args.out,
+            per_cluster=int(args.per_cluster),
+            max_total=int(args.max_total),
+        )
+        print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
     if raw_argv and raw_argv[0] == "flowmap":
         parser = _build_flowmap_parser()
