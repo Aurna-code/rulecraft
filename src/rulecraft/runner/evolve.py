@@ -66,6 +66,14 @@ def _baseline_policy_profile(path: str | None) -> dict[str, Any]:
     return load_profile(path)
 
 
+def _json_safe(value: Any) -> Any:
+    try:
+        json.dumps(value, ensure_ascii=False)
+    except TypeError:
+        return None
+    return value
+
+
 def _baseline_rulebook_path(path: str | None, outdir: Path) -> str:
     if path is not None:
         return path
@@ -146,6 +154,7 @@ def run_evolve(
         "synth": bool(synth),
         "budget_usd": budget_usd,
         "budget_tokens": budget_tokens,
+        "seed": int(seed),
     }
     regpack_params = {
         "per_cluster": int(regpack_per_cluster),
@@ -174,6 +183,8 @@ def run_evolve(
         promote_rules_params=promote_rules_params,
         outputs=outputs,
     )
+    if str(adapter).lower() == "scripted":
+        manifest["params"]["scripted_adapter"] = _json_safe(scripted_adapter)
     write_manifest(outdir_path / "manifest.json", manifest)
 
     adapter_for = _adapter_factory(adapter, scripted_adapter)
@@ -201,6 +212,7 @@ def run_evolve(
         top_m=int(top_m),
         synth=bool(synth),
         policy_profile=baseline_run_profile,
+        seed=int(seed),
     )
 
     metrics = summarize_jsonl(output_paths["baseline_eventlog"], task_metrics=True)

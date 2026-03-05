@@ -143,6 +143,7 @@ def run_promotion(
         max_attempts=1,
         scale="off",
         policy_profile=baseline_profile_data,
+        seed=seed,
     )
     candidate_summary = run_batch(
         tasks_path=tasks_path,
@@ -152,6 +153,7 @@ def run_promotion(
         max_attempts=1,
         scale="off",
         policy_profile=candidate_profile_data,
+        seed=seed,
     )
 
     baseline_metrics = _metrics_from_eventlog(baseline_out)

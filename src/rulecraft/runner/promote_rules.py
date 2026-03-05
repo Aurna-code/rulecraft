@@ -352,6 +352,7 @@ def run_rule_promotion(
         scale="off",
         rulebook_store=baseline_rulebook,
         policy_profile=policy_profile,
+        seed=seed,
     )
     candidate_summary = run_batch(
         tasks_path=tasks_path,
@@ -362,6 +363,7 @@ def run_rule_promotion(
         scale="off",
         rulebook_store=candidate_rulebook,
         policy_profile=policy_profile,
+        seed=seed,
     )
 
     (

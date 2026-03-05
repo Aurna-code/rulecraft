@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any, Mapping
 
 
@@ -31,9 +32,18 @@ def _list_size(value: Any) -> int:
     return 0
 
 
-def rank_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _tie_breaker(seed: int | None, idx: int, candidate: Mapping[str, Any]) -> int:
+    if seed is None:
+        return 0
+
+    payload = f"{seed}:{idx}:{candidate.get('y', '')}:{candidate.get('verifier', {})}"
+    digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()
+    return int(digest[:8], 16)
+
+
+def rank_candidates(candidates: list[dict[str, Any]], seed: int | None = None) -> list[dict[str, Any]]:
     """Sort rollout candidates from best to worst using verifier-first heuristics."""
-    decorated: list[tuple[tuple[int, int, int, int], dict[str, Any]]] = []
+    decorated: list[tuple[tuple[int, int, int, int, int], dict[str, Any]]] = []
 
     for idx, candidate in enumerate(candidates):
         verifier = _verifier(candidate)
@@ -41,6 +51,7 @@ def rank_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
             _priority(verifier),
             _list_size(verifier.get("violated_constraints")),
             _list_size(verifier.get("reason_codes")),
+            _tie_breaker(seed, idx, candidate),
             idx,
         )
         decorated.append((key, candidate))

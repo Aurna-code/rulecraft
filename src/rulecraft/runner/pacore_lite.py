@@ -209,6 +209,7 @@ def run_pacore_lite(
     tier: str | None = None,
     task_id: str | None = None,
     attempt_idx: int = 0,
+    seed: int | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Run PaCoRe-lite and return the chosen final output plus compact rollout metadata."""
     task_mode: TaskMode = "json" if mode == "json" else "text"
@@ -244,7 +245,7 @@ def run_pacore_lite(
             }
         )
 
-    ranked = rank_candidates(candidates)
+    ranked = rank_candidates(candidates, seed=seed)
     if ranked:
         best_candidate = ranked[0]
     else:

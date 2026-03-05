@@ -20,8 +20,10 @@ from .policy.profile import load_profile
 from .policy.suggest import suggest_policy
 from .runner.batch import run_batch
 from .runner.evolve import run_evolve
+from .runner.manifest import load_manifest
 from .runner.promote import run_promotion
 from .runner.promote_rules import run_rule_promotion
+from .runner.replay import run_replay
 from .rulebook.lint import lint_rulebook
 from .rulebook.prune import compute_rule_stats, prune_rulebook
 from .rulebook.suggest import suggest_rules
@@ -180,6 +182,13 @@ def _build_evolve_parser() -> argparse.ArgumentParser:
     parser.add_argument("--expand-counterexamples", action="store_true", help="Enable regpack counterexample expansion.")
     parser.add_argument("--seed", type=int, default=1337, help="Deterministic seed used for generated artifacts.")
     parser.add_argument("--fail-on-regression", action="store_true", help="Return exit code 1 if any promotion gate fails.")
+    return parser
+
+
+def _build_replay_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Replay an evolve pipeline from a saved manifest.")
+    parser.add_argument("--manifest", required=True, help="Path to evolve manifest JSON.")
+    parser.add_argument("--outdir", default=None, help="Optional output directory for replay artifacts.")
     return parser
 
 
@@ -513,6 +522,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
         if args.fail_on_regression and not bool(summary.get("ok")):
             return 1
+        return 0
+    if raw_argv and raw_argv[0] == "replay":
+        parser = _build_replay_parser()
+        args = parser.parse_args(raw_argv[1:])
+
+        manifest = load_manifest(args.manifest)
+        params = manifest.get("params") if isinstance(manifest, dict) else None
+        adapter_name = params.get("adapter") if isinstance(params, dict) else None
+        if adapter_name == "openai" and not os.getenv("OPENAI_API_KEY"):
+            print("OPENAI_API_KEY is not set. Skipping OpenAI replay run.")
+            return 2
+
+        summary = run_replay(manifest_path=args.manifest, outdir=args.outdir)
+        print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
     if raw_argv and raw_argv[0] == "flowmap":
         parser = _build_flowmap_parser()

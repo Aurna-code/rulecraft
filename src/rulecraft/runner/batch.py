@@ -379,6 +379,7 @@ def run_batch(
     synth: bool = True,
     verifier_cache: VerifierCache | None = None,
     policy_profile: Mapping[str, Any] | None = None,
+    seed: int | None = None,
 ) -> dict[str, int]:
     scale_mode = str(scale).lower()
     if scale_mode not in {"off", "auto", "probe", "full"}:
@@ -597,6 +598,7 @@ def run_batch(
                     tier="probe",
                     task_id=task_id,
                     attempt_idx=probe_attempt_idx,
+                    seed=seed,
                 )
                 probe_verifier_meta: dict[str, Any] = {}
                 probe_verifier = verify_output(
@@ -649,6 +651,7 @@ def run_batch(
                         tier="full",
                         task_id=task_id,
                         attempt_idx=full_attempt_idx,
+                        seed=seed,
                     )
                     full_verifier_meta: dict[str, Any] = {}
                     full_verifier = verify_output(
@@ -691,6 +694,7 @@ def run_batch(
                         tier="full",
                         task_id=task_id,
                         attempt_idx=full_attempt_idx,
+                        seed=seed,
                     )
                     full_verifier_meta: dict[str, Any] = {}
                     full_verifier = verify_output(
