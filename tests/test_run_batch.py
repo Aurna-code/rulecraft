@@ -105,6 +105,30 @@ def test_run_batch_cli_stub_writes_output(tmp_path: Path, capsys: pytest.Capture
     assert len(out_path.read_text(encoding="utf-8").strip().splitlines()) == 3
 
 
+def test_run_batch_cli_supports_scale_auto(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    tasks_path = tmp_path / "tasks_cli_scale.jsonl"
+    out_path = tmp_path / "out_cli_scale.jsonl"
+    _write_tasks(tasks_path)
+
+    exit_code = main(
+        [
+            "run-batch",
+            "--tasks",
+            str(tasks_path),
+            "--adapter",
+            "stub",
+            "--out",
+            str(out_path),
+            "--scale",
+            "auto",
+        ]
+    )
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["total"] == 3
+    assert len(out_path.read_text(encoding="utf-8").strip().splitlines()) == 3
+
+
 def test_run_batch_cli_openai_requires_api_key(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

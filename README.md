@@ -75,6 +75,39 @@ python -m rulecraft run-batch \
   --budget-tokens 2000
 ```
 
+Run with test-time scaling:
+
+```bash
+python -m rulecraft run-batch \
+  --tasks examples/tasks/sample_tasks.jsonl \
+  --adapter stub \
+  --out .rulecraft/batch_eventlog_scale_auto.jsonl \
+  --scale auto
+```
+
+Choose explicit scaling tiers:
+
+```bash
+python -m rulecraft run-batch \
+  --tasks examples/tasks/sample_tasks.jsonl \
+  --adapter stub \
+  --out .rulecraft/batch_eventlog_scale_probe.jsonl \
+  --scale probe \
+  --k-probe 3 \
+  --top-m 2
+```
+
+```bash
+python -m rulecraft run-batch \
+  --tasks examples/tasks/sample_tasks.jsonl \
+  --adapter stub \
+  --out .rulecraft/batch_eventlog_scale_full.jsonl \
+  --scale full \
+  --k-full 8
+```
+
+Scaling defaults are conservative: `--scale off` unless explicitly enabled. Budget ceilings still cap escalation from probe to full.
+
 Run with rulebook selection and injection:
 
 ```bash

@@ -219,3 +219,89 @@ def test_metrics_cli_group_by_prints_grouped_json(tmp_path: Path, capsys: pytest
     assert "by_bucket_key" in payload
     assert payload["by_bucket_key"]["support"]["total_events"] == 1
     assert payload["by_bucket_key"]["(null)"]["total_events"] == 1
+
+
+def test_metrics_include_scaling_rates(tmp_path: Path) -> None:
+    eventlog_path = tmp_path / "eventlog_scale_rates.jsonl"
+    _write_jsonl(
+        eventlog_path,
+        [
+            {
+                "trace_id": "s1-0",
+                "x_ref": "x-s1-0",
+                "selected_rules": [],
+                "run": {"task_id": "task-1", "extra": {"task_id": "task-1", "attempt_idx": 0, "phase": "primary"}},
+                "verifier": {"verdict": "FAIL", "outcome": "UNKNOWN"},
+                "cost": {"meta": {"backend": "stub", "model": "stub", "cost_usd": 0.0, "error": None}},
+            },
+            {
+                "trace_id": "s1-1",
+                "x_ref": "x-s1-1",
+                "selected_rules": [],
+                "run": {
+                    "task_id": "task-1",
+                    "extra": {
+                        "task_id": "task-1",
+                        "attempt_idx": 1,
+                        "phase": "scale_probe",
+                        "scale": {"used_synth": False},
+                    },
+                },
+                "verifier": {"verdict": "PASS", "outcome": "OK"},
+                "cost": {"meta": {"backend": "stub", "model": "stub", "cost_usd": 0.0, "error": None}},
+            },
+            {
+                "trace_id": "s2-0",
+                "x_ref": "x-s2-0",
+                "selected_rules": [],
+                "run": {"task_id": "task-2", "extra": {"task_id": "task-2", "attempt_idx": 0, "phase": "primary"}},
+                "verifier": {"verdict": "FAIL", "outcome": "UNKNOWN"},
+                "cost": {"meta": {"backend": "stub", "model": "stub", "cost_usd": 0.0, "error": None}},
+            },
+            {
+                "trace_id": "s2-1",
+                "x_ref": "x-s2-1",
+                "selected_rules": [],
+                "run": {
+                    "task_id": "task-2",
+                    "extra": {
+                        "task_id": "task-2",
+                        "attempt_idx": 1,
+                        "phase": "scale_probe",
+                        "scale": {"used_synth": True},
+                    },
+                },
+                "verifier": {"verdict": "FAIL", "outcome": "UNKNOWN"},
+                "cost": {"meta": {"backend": "stub", "model": "stub", "cost_usd": 0.0, "error": None}},
+            },
+            {
+                "trace_id": "s2-2",
+                "x_ref": "x-s2-2",
+                "selected_rules": [],
+                "run": {
+                    "task_id": "task-2",
+                    "extra": {
+                        "task_id": "task-2",
+                        "attempt_idx": 2,
+                        "phase": "scale_full",
+                        "scale": {"used_synth": True},
+                    },
+                },
+                "verifier": {"verdict": "PASS", "outcome": "OK"},
+                "cost": {"meta": {"backend": "stub", "model": "stub", "cost_usd": 0.0, "error": None}},
+            },
+            {
+                "trace_id": "s3-0",
+                "x_ref": "x-s3-0",
+                "selected_rules": [],
+                "run": {"task_id": "task-3", "extra": {"task_id": "task-3", "attempt_idx": 0, "phase": "primary"}},
+                "verifier": {"verdict": "PASS", "outcome": "OK"},
+                "cost": {"meta": {"backend": "stub", "model": "stub", "cost_usd": 0.0, "error": None}},
+            },
+        ],
+    )
+
+    summary = summarize_jsonl(eventlog_path)
+    assert summary["scale_probe_rate"] == pytest.approx(2 / 3)
+    assert summary["scale_full_rate"] == pytest.approx(1 / 3)
+    assert summary["synth_rate"] == pytest.approx(2 / 3)

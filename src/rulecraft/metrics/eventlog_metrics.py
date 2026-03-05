@@ -61,9 +61,30 @@ class _RunningStats:
         self.tokens_in_total = 0
         self.tokens_out_total = 0
         self.cost_usd_total = 0.0
+        self._task_ids: set[str] = set()
+        self._scale_probe_tasks: set[str] = set()
+        self._scale_full_tasks: set[str] = set()
+        self.scale_attempt_count = 0
+        self.synth_used_count = 0
 
     def update(self, event: dict[str, Any]) -> None:
         self.total_events += 1
+
+        task_id = _extract_task_id(event)
+        if task_id is not None:
+            self._task_ids.add(task_id)
+
+        phase = _extract_phase(event)
+        if phase in {"scale_probe", "scale_full"}:
+            self.scale_attempt_count += 1
+            if phase == "scale_probe" and task_id is not None:
+                self._scale_probe_tasks.add(task_id)
+            if phase == "scale_full" and task_id is not None:
+                self._scale_full_tasks.add(task_id)
+
+            scale_meta = _extract_scale_meta(event)
+            if isinstance(scale_meta, Mapping) and bool(scale_meta.get("used_synth")):
+                self.synth_used_count += 1
 
         verifier = event.get("verifier", {})
         verdict = verifier.get("verdict") if isinstance(verifier, dict) else None
@@ -127,6 +148,7 @@ class _RunningStats:
                 self.cost_usd_total += cost_usd
 
     def to_dict(self) -> dict[str, Any]:
+        task_count_for_scale = len(self._task_ids)
         top_reason_codes = [{"code": code, "count": count} for code, count in self.reason_counts.most_common(10)]
         return {
             "total_events": self.total_events,
@@ -145,6 +167,9 @@ class _RunningStats:
             "tokens_in_total": self.tokens_in_total,
             "tokens_out_total": self.tokens_out_total,
             "cost_usd_total": self.cost_usd_total,
+            "scale_probe_rate": _safe_rate(len(self._scale_probe_tasks), task_count_for_scale),
+            "scale_full_rate": _safe_rate(len(self._scale_full_tasks), task_count_for_scale),
+            "synth_rate": _safe_rate(self.synth_used_count, self.scale_attempt_count),
         }
 
 
@@ -181,6 +206,36 @@ def _extract_attempt_idx(event: Mapping[str, Any]) -> int | None:
         return attempt_idx
     if isinstance(attempt_idx, float) and attempt_idx.is_integer():
         return int(attempt_idx)
+    return None
+
+
+def _extract_phase(event: Mapping[str, Any]) -> str | None:
+    run = event.get("run")
+    if not isinstance(run, Mapping):
+        return None
+
+    extra = run.get("extra")
+    if not isinstance(extra, Mapping):
+        return None
+
+    phase = extra.get("phase")
+    if isinstance(phase, str) and phase:
+        return phase
+    return None
+
+
+def _extract_scale_meta(event: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    run = event.get("run")
+    if not isinstance(run, Mapping):
+        return None
+
+    extra = run.get("extra")
+    if not isinstance(extra, Mapping):
+        return None
+
+    scale = extra.get("scale")
+    if isinstance(scale, Mapping):
+        return scale
     return None
 
 

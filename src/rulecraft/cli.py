@@ -66,6 +66,16 @@ def _build_run_batch_parser() -> argparse.ArgumentParser:
     parser.add_argument("--budget-usd", type=float, default=None, help="Optional per-task budget ceiling in USD.")
     parser.add_argument("--budget-tokens", type=int, default=None, help="Optional per-task token budget ceiling.")
     parser.add_argument("--rulebook", default=None, help="Optional rulebook JSON path for selection and injection.")
+    parser.add_argument(
+        "--scale",
+        choices=("off", "auto", "probe", "full"),
+        default="off",
+        help="Scaling mode: off (default), auto policy, probe-only, or forced full rollout.",
+    )
+    parser.add_argument("--k-probe", type=int, default=3, help="Number of candidates for probe rollout.")
+    parser.add_argument("--k-full", type=int, default=8, help="Number of candidates for full rollout.")
+    parser.add_argument("--top-m", type=int, default=2, help="How many top candidates to keep before synth.")
+    parser.add_argument("--no-synth", action="store_true", help="Disable synth step and return best ranked candidate.")
     return parser
 
 
@@ -98,6 +108,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         if args.budget_tokens is not None and args.budget_tokens < 0:
             parser.error("--budget-tokens must be >= 0")
+        if args.k_probe < 1:
+            parser.error("--k-probe must be >= 1")
+        if args.k_full < 1:
+            parser.error("--k-full must be >= 1")
+        if args.top_m < 1:
+            parser.error("--top-m must be >= 1")
 
         rulebook_store = None
         if args.rulebook:
@@ -118,6 +134,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             budget_usd=args.budget_usd,
             budget_tokens=args.budget_tokens,
             rulebook_store=rulebook_store,
+            scale=args.scale,
+            k_probe=int(args.k_probe),
+            k_full=int(args.k_full),
+            top_m=int(args.top_m),
+            synth=not bool(args.no_synth),
         )
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
