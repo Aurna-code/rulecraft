@@ -56,8 +56,11 @@ class _RunningStats:
         self.fail_count = 0
         self.partial_count = 0
         self.error_count = 0
+        self.rate_limit_error_count = 0
+        self.verifier_cache_hit_count = 0
         self.counts_by_verdict: Counter[str] = Counter()
         self.counts_by_outcome: Counter[str] = Counter()
+        self.error_class_counts: Counter[str] = Counter()
         self.reason_counts: Counter[str] = Counter()
         self.failure_cluster_counts: Counter[str] = Counter()
         self.failure_cluster_samples: dict[str, dict[str, Any]] = {}
@@ -89,6 +92,12 @@ class _RunningStats:
             scale_meta = _extract_scale_meta(event)
             if isinstance(scale_meta, Mapping) and bool(scale_meta.get("used_synth")):
                 self.synth_used_count += 1
+
+        run = event.get("run")
+        if isinstance(run, Mapping):
+            extra = run.get("extra")
+            if isinstance(extra, Mapping) and bool(extra.get("verifier_cache_hit")):
+                self.verifier_cache_hit_count += 1
 
         verifier = event.get("verifier", {})
         verdict = verifier.get("verdict") if isinstance(verifier, dict) else None
@@ -161,8 +170,19 @@ class _RunningStats:
 
         meta = cost.get("meta")
         if isinstance(meta, dict):
-            if meta.get("error") is not None:
+            error_value = meta.get("error")
+            if error_value is not None:
                 self.error_count += 1
+            error_class = meta.get("error_class")
+            if isinstance(error_class, str) and error_class:
+                self.error_class_counts[error_class] += 1
+                if error_class == "rate_limit":
+                    self.rate_limit_error_count += 1
+            elif isinstance(error_value, str):
+                lowered = error_value.lower()
+                if "rate limit" in lowered or "429" in lowered:
+                    self.error_class_counts["rate_limit"] += 1
+                    self.rate_limit_error_count += 1
             cost_usd = _coerce_optional_float(meta.get("cost_usd"))
             if cost_usd is not None:
                 self.cost_usd_total += cost_usd
@@ -191,8 +211,11 @@ class _RunningStats:
             "fail_rate": _safe_rate(self.fail_count, self.total_events),
             "partial_rate": _safe_rate(self.partial_count, self.total_events),
             "error_rate": _safe_rate(self.error_count, self.total_events),
+            "rate_limit_rate": _safe_rate(self.rate_limit_error_count, self.total_events),
+            "cache_hit_rate": _safe_rate(self.verifier_cache_hit_count, self.total_events),
             "counts_by_verdict": dict(self.counts_by_verdict),
             "counts_by_outcome": dict(self.counts_by_outcome),
+            "error_class_counts": dict(sorted(self.error_class_counts.items())),
             "top_reason_codes": top_reason_codes,
             "top_failure_clusters": top_failure_clusters,
             "latency_ms_p50": _percentile(self.latencies, 50),

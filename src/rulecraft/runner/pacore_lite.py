@@ -154,6 +154,11 @@ def _meta_to_cost_fields(meta: Mapping[str, Any]) -> dict[str, Any]:
             "model": meta.get("model", meta.get("model_name", "unknown")),
             "cost_usd": _coerce_optional_float(meta.get("cost_usd")),
             "error": meta.get("error"),
+            "error_class": meta.get("error_class"),
+            "status_code": _coerce_optional_int(meta.get("status_code")),
+            "attempts": _coerce_optional_int(meta.get("attempts")),
+            "retries": _coerce_optional_int(meta.get("retries")),
+            "retry_sleep_s_total": _coerce_optional_float(meta.get("retry_sleep_s_total")),
         },
     }
 
@@ -166,6 +171,7 @@ def _rollup_call_meta(call_metas: list[dict[str, Any]]) -> dict[str, Any]:
     tokens_out = 0
     cost_usd = 0.0
     first_error: Any = None
+    first_error_class: Any = None
 
     for meta in call_metas:
         backend_value = meta.get("backend")
@@ -182,6 +188,7 @@ def _rollup_call_meta(call_metas: list[dict[str, Any]]) -> dict[str, Any]:
 
         if first_error is None and meta.get("error") is not None:
             first_error = meta.get("error")
+            first_error_class = meta.get("error_class")
 
     return {
         "backend": backend,
@@ -191,6 +198,7 @@ def _rollup_call_meta(call_metas: list[dict[str, Any]]) -> dict[str, Any]:
         "tokens_out": tokens_out,
         "cost_usd": cost_usd,
         "error": first_error,
+        "error_class": first_error_class,
     }
 
 

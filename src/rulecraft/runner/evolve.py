@@ -102,6 +102,10 @@ def _as_float(value: Any) -> float | None:
     return None
 
 
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
 def run_evolve(
     *,
     outdir: str,
@@ -261,6 +265,7 @@ def run_evolve(
 
     policy_deltas = policy_report.get("deltas") if isinstance(policy_report.get("deltas"), Mapping) else {}
     rules_deltas = rules_report.get("deltas") if isinstance(rules_report.get("deltas"), Mapping) else {}
+    event_metrics = _mapping(_mapping(metrics).get("event_metrics", metrics))
 
     policy_ok = bool(policy_report.get("ok"))
     rules_ok = bool(rules_report.get("ok"))
@@ -296,6 +301,9 @@ def run_evolve(
             "improved": improved_clusters[:10],
             "worsened": worsened_clusters[:10],
         },
+        "adapter_error_rate": _as_float(event_metrics.get("error_rate")),
+        "rate_limit_rate": _as_float(event_metrics.get("rate_limit_rate")),
+        "cache_hit_rate": _as_float(event_metrics.get("cache_hit_rate")),
         "files_written": {key: str(path) for key, path in sorted(output_paths.items())},
         "regpack": regpack_summary,
     }

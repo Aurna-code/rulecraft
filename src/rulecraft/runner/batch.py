@@ -222,6 +222,11 @@ def _cost_meta_from_adapter(meta: Mapping[str, Any]) -> dict[str, Any]:
         "model": meta.get("model", meta.get("model_name", "unknown")),
         "cost_usd": _coerce_optional_float(meta.get("cost_usd")),
         "error": meta.get("error"),
+        "error_class": meta.get("error_class"),
+        "status_code": _coerce_optional_int(meta.get("status_code")),
+        "attempts": _coerce_optional_int(meta.get("attempts")),
+        "retries": _coerce_optional_int(meta.get("retries")),
+        "retry_sleep_s_total": _coerce_optional_float(meta.get("retry_sleep_s_total")),
     }
     if meta.get("response_id") is not None:
         cost_meta["response_id"] = meta.get("response_id")

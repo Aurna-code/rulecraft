@@ -297,6 +297,47 @@ How to read `summary.json`:
 
 The repository includes an optional nightly stub workflow at `.github/workflows/nightly-evolve.yml` that runs `evolve` with `--adapter stub` and uploads summary reports. OpenAI adapter runs are not used in CI by default.
 
+Compare two evolve/replay runs from their manifests:
+
+```bash
+python -m rulecraft diff-runs \
+  --a .rulecraft/evolve/run1/manifest.json \
+  --b .rulecraft/evolve/run2/manifest.json
+```
+
+Optionally write diff output to file:
+
+```bash
+python -m rulecraft diff-runs \
+  --a .rulecraft/evolve/run1/manifest.json \
+  --b .rulecraft/evolve/run2/manifest.json \
+  --out .rulecraft/evolve/diff_run1_vs_run2.json
+```
+
+Cleanup old run directories with retention controls:
+
+```bash
+python -m rulecraft cleanup --root .rulecraft/evolve --keep-last 10 --dry-run
+```
+
+Apply deletion:
+
+```bash
+python -m rulecraft cleanup --root .rulecraft/evolve --keep-last 10 --apply
+```
+
+Optional age-based retention:
+
+```bash
+python -m rulecraft cleanup --root .rulecraft/evolve --keep-last 10 --keep-days 30 --apply
+```
+
+OpenAI adapter retry defaults:
+
+- Exponential backoff with jitter (`max_retries=2`, base delay `0.2s`, max delay `2.0s`).
+- Retries on `429`, `500-599`, and timeout-class errors.
+- Final adapter metadata includes `error_class` (`rate_limit`, `timeout`, `server_error`, `client_error`, `unknown`) and retry counters.
+
 ## Task Contracts and L3 Validation
 
 Task JSONL rows can include an optional `contract` object:

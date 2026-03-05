@@ -59,7 +59,16 @@ def test_evolve_smoke_creates_expected_outputs(tmp_path: Path, capsys: pytest.Ca
         assert (outdir / rel_path).exists(), rel_path
 
     summary = json.loads((outdir / "summary.json").read_text(encoding="utf-8"))
-    assert set(summary.keys()) >= {"ok", "gates", "key_deltas", "top_clusters", "files_written"}
+    assert set(summary.keys()) >= {
+        "ok",
+        "gates",
+        "key_deltas",
+        "top_clusters",
+        "adapter_error_rate",
+        "rate_limit_rate",
+        "cache_hit_rate",
+        "files_written",
+    }
     assert set(summary["gates"].keys()) == {"policy", "rules"}
     assert set(summary["key_deltas"].keys()) >= {
         "task_pass_rate",
@@ -68,6 +77,9 @@ def test_evolve_smoke_creates_expected_outputs(tmp_path: Path, capsys: pytest.Ca
         "cost_usd_total",
     }
     assert set(summary["top_clusters"].keys()) == {"improved", "worsened"}
+    assert isinstance(summary["adapter_error_rate"], (int, float))
+    assert isinstance(summary["rate_limit_rate"], (int, float))
+    assert isinstance(summary["cache_hit_rate"], (int, float))
 
     manifest = json.loads((outdir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["inputs"]["tasks_path"] == str(tasks_path.resolve())
