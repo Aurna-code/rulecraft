@@ -5,6 +5,7 @@ from .budget_router import BudgetState, should_attempt_repair
 from .profile import apply_overrides, load_profile, match_bucket
 from .repair import build_json_repair_messages
 from .repair_loop import build_repair_prompt
+from .suggest import suggest_policy
 from .should_scale import ScaleTier, escalate_to_full, is_pass, is_strong_pass, should_scale
 
 __all__ = [
@@ -16,6 +17,7 @@ __all__ = [
     "load_profile",
     "match_bucket",
     "apply_overrides",
+    "suggest_policy",
     "ScaleTier",
     "is_pass",
     "is_strong_pass",

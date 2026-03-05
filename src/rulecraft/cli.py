@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Any, Sequence
 
 from .adapters.dummy import DummyAdapter
@@ -15,6 +16,7 @@ from .analysis.flowmap import analyze_flowmap
 from .metrics.eventlog_metrics import summarize_jsonl
 from .orchestrator import Orchestrator
 from .policy.profile import load_profile
+from .policy.suggest import suggest_policy
 from .runner.batch import run_batch
 from .rulebook.store import RulebookStore
 from .verifier.cache import SqliteVerifierCache
@@ -91,6 +93,14 @@ def _build_run_batch_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _build_suggest_policy_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Suggest a conservative policy profile from EventLog metrics.")
+    parser.add_argument("--path", required=True, help="EventLog JSONL file path.")
+    parser.add_argument("--out", required=True, help="Output policy profile JSON path.")
+    parser.add_argument("--group-by", choices=("bucket_key",), default="bucket_key", help="Grouping dimension.")
+    return parser
+
+
 def _build_batch_adapter(adapter_spec: str) -> Any:
     if adapter_spec == "stub":
         return StubAdapter(mode="text")
@@ -162,6 +172,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             policy_profile=policy_profile,
         )
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+    if raw_argv and raw_argv[0] == "suggest-policy":
+        parser = _build_suggest_policy_parser()
+        args = parser.parse_args(raw_argv[1:])
+        profile = suggest_policy(args.path, group_by=args.group_by)
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(profile, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        print(
+            f"Suggested policy profile with {len(profile.get('rules', []))} bucket rule(s) from {args.path}.",
+            file=sys.stderr,
+        )
         return 0
     if raw_argv and raw_argv[0] == "flowmap":
         parser = _build_flowmap_parser()
