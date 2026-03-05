@@ -19,6 +19,7 @@ from .orchestrator import Orchestrator
 from .policy.profile import load_profile
 from .policy.suggest import suggest_policy
 from .runner.batch import run_batch
+from .runner.evolve import run_evolve
 from .runner.promote import run_promotion
 from .runner.promote_rules import run_rule_promotion
 from .rulebook.lint import lint_rulebook
@@ -158,6 +159,27 @@ def _build_promote_rules_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=None, help="Optional seed metadata for reproducibility.")
     parser.add_argument("--report", default=None, help="Optional output JSON report path.")
     parser.add_argument("--fail-on-regression", action="store_true", help="Return exit code 3 on promotion regressions.")
+    return parser
+
+
+def _build_evolve_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run end-to-end evolution and write reproducible run artifacts.")
+    parser.add_argument("--tasks", required=True, help="Task JSONL path.")
+    parser.add_argument("--adapter", choices=("stub", "openai"), default="stub", help="Batch adapter backend.")
+    parser.add_argument("--outdir", required=True, help="Run output directory.")
+    parser.add_argument("--baseline-policy", default=None, help="Optional baseline policy profile JSON path.")
+    parser.add_argument("--baseline-rulebook", default=None, help="Optional baseline rulebook JSON path.")
+    parser.add_argument(
+        "--scale",
+        choices=("off", "auto", "probe", "full"),
+        default="off",
+        help="Scaling mode used for baseline run-batch.",
+    )
+    parser.add_argument("--repair", action="store_true", help="Enable repair attempts in baseline run-batch.")
+    parser.add_argument("--max-attempts", type=int, default=1, help="Maximum attempts per task including primary.")
+    parser.add_argument("--expand-counterexamples", action="store_true", help="Enable regpack counterexample expansion.")
+    parser.add_argument("--seed", type=int, default=1337, help="Deterministic seed used for generated artifacts.")
+    parser.add_argument("--fail-on-regression", action="store_true", help="Return exit code 1 if any promotion gate fails.")
     return parser
 
 
@@ -464,6 +486,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
         if args.fail_on_regression and not bool(report.get("ok")):
             return 3
+        return 0
+    if raw_argv and raw_argv[0] == "evolve":
+        parser = _build_evolve_parser()
+        args = parser.parse_args(raw_argv[1:])
+
+        if args.adapter == "openai" and not os.getenv("OPENAI_API_KEY"):
+            print("OPENAI_API_KEY is not set. Skipping OpenAI evolve run.")
+            return 2
+        if args.max_attempts < 1:
+            parser.error("--max-attempts must be >= 1")
+
+        summary = run_evolve(
+            outdir=args.outdir,
+            tasks_path=args.tasks,
+            adapter=args.adapter,
+            baseline_policy_profile_path=args.baseline_policy,
+            baseline_rulebook_path=args.baseline_rulebook,
+            scale=args.scale,
+            repair=bool(args.repair),
+            max_attempts=int(args.max_attempts),
+            expand_counterexamples=bool(args.expand_counterexamples),
+            seed=int(args.seed),
+            fail_on_regression=bool(args.fail_on_regression),
+        )
+        print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+        if args.fail_on_regression and not bool(summary.get("ok")):
+            return 1
         return 0
     if raw_argv and raw_argv[0] == "flowmap":
         parser = _build_flowmap_parser()
