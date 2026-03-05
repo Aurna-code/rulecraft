@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "bucket_match": "support",
+      "overrides": {
+        "max_attempts": 2,
+        "scale": "auto",
+        "k_probe": 3,
+        "k_full": 6,
+        "top_m": 2,
+        "synth": true,
+        "budget_tokens": 3000
+      }
+    },
+    {
+      "bucket_match": "regex:^contracts",
+      "overrides": {
+        "scale": "probe",
+        "max_attempts": 2,
+        "k_probe": 2,
+        "top_m": 2,
+        "synth": false,
+        "budget_usd": 0.1
+      }
+    }
+  ]
+}

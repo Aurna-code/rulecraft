@@ -37,6 +37,12 @@ Aggregate EventLog metrics:
 python -m rulecraft metrics --path .rulecraft/eventlog.jsonl
 ```
 
+Analyze an offline FlowMap by `bucket_key`:
+
+```bash
+python -m rulecraft flowmap --path .rulecraft/eventlog.jsonl
+```
+
 Aggregate by `bucket_key`:
 
 ```bash
@@ -107,6 +113,18 @@ python -m rulecraft run-batch \
 ```
 
 Scaling defaults are conservative: `--scale off` unless explicitly enabled. Budget ceilings still cap escalation from probe to full.
+
+Apply bucket-aware policy profile overrides:
+
+```bash
+python -m rulecraft run-batch \
+  --tasks examples/tasks/sample_tasks.jsonl \
+  --adapter stub \
+  --out .rulecraft/batch_eventlog_policy.jsonl \
+  --policy-profile examples/policies/sample_policy_profile.json
+```
+
+Policy profiles support per-bucket overrides for `max_attempts`, scaling mode, rollout K values, synth toggle, and budgets. First matching rule wins.
 
 ## Task Contracts and L3 Validation
 

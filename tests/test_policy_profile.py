@@ -154,3 +154,10 @@ def test_run_batch_cli_accepts_policy_profile(tmp_path: Path, capsys: pytest.Cap
     assert exit_code == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["total"] == 1
+
+
+def test_sample_policy_profile_file_is_valid() -> None:
+    profile = load_profile(ROOT / "examples" / "policies" / "sample_policy_profile.json")
+    assert profile["version"] == 1
+    assert isinstance(profile["rules"], list)
+    assert len(profile["rules"]) >= 2
