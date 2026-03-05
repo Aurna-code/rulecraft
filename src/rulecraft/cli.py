@@ -11,6 +11,7 @@ from typing import Any, Sequence
 from .adapters.dummy import DummyAdapter
 from .adapters.openai_adapter import OpenAIAdapter
 from .adapters.stub import StubAdapter
+from .analysis.flowmap import analyze_flowmap
 from .metrics.eventlog_metrics import summarize_jsonl
 from .orchestrator import Orchestrator
 from .runner.batch import run_batch
@@ -52,6 +53,13 @@ def _build_metrics_parser() -> argparse.ArgumentParser:
     parser.add_argument("--path", default=".rulecraft/eventlog.jsonl", help="EventLog JSONL file path.")
     parser.add_argument("--group-by", choices=("bucket_key",), default=None, help="Optional grouping dimension.")
     parser.add_argument("--task-metrics", action="store_true", help="Include per-task attempt and repair metrics.")
+    return parser
+
+
+def _build_flowmap_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Analyze EventLog JSONL into offline FlowMap risk/opportunity maps.")
+    parser.add_argument("--path", default=".rulecraft/eventlog.jsonl", help="EventLog JSONL file path.")
+    parser.add_argument("--group-by", choices=("bucket_key",), default="bucket_key", help="Grouping dimension.")
     return parser
 
 
@@ -144,6 +152,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             synth=not bool(args.no_synth),
             verifier_cache=verifier_cache,
         )
+        print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+    if raw_argv and raw_argv[0] == "flowmap":
+        parser = _build_flowmap_parser()
+        args = parser.parse_args(raw_argv[1:])
+        summary = analyze_flowmap(args.path, group_by=args.group_by)
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
 
