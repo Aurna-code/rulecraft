@@ -81,11 +81,11 @@ def test_build_repair_prompt_includes_contract_violation_hint() -> None:
         verifier={
             "verdict": "FAIL",
             "outcome": "FAIL",
-            "reason_codes": ["schema_violation"],
-            "violated_constraints": ["jsonschema:$.count:type"],
+            "reason_codes": ["SCHEMA_VIOLATION"],
+            "violated_constraints": ["SCHEMA:JSONSCHEMA:$.count:type"],
         },
     )
 
     assert instructions == "Return JSON that satisfies the contract. Output JSON only."
     assert "Contract violations:" in prompt
-    assert "jsonschema:$.count:type" in prompt
+    assert "SCHEMA:JSONSCHEMA:$.count:type" in prompt

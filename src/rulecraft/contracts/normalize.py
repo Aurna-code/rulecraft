@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from .ssot import SCHEMA_VERSION
+from ..verifier.taxonomy import COST_META_COERCED
 
 _DEFAULT_VERIFIER_ID = "vf_l1_v1"
 _UNKNOWN_RULE_TYPE = "UnknownRule"
@@ -235,7 +236,7 @@ def normalize_eventlog_dict(d: dict[str, Any]) -> dict[str, Any]:
     normalized_verifier = _normalize_verifier(verifier_map, event)
     normalized_cost, cost_meta_coerced = _normalize_cost(cost_map, event)
     if cost_meta_coerced:
-        _append_reason_code(normalized_verifier, "cost_meta_coerced")
+        _append_reason_code(normalized_verifier, COST_META_COERCED)
 
     normalized: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,

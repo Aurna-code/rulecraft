@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping
 
 from ..contracts import normalize_eventlog_dict
+from ..verifier.taxonomy import FORMAT_LEAK, SCHEMA_VIOLATION
 
 
 def _coerce_optional_int(value: Any) -> int | None:
@@ -115,9 +116,9 @@ class _RunningStats:
         if isinstance(reason_codes, list):
             normalized_codes = [code for code in reason_codes if isinstance(code, str) and code]
             self.reason_counts.update(normalized_codes)
-            if "format_leak" in normalized_codes:
+            if FORMAT_LEAK in normalized_codes or "format_leak" in normalized_codes:
                 self.format_leak_count += 1
-            if "schema_violation" in normalized_codes:
+            if SCHEMA_VIOLATION in normalized_codes or "schema_violation" in normalized_codes:
                 self.schema_violation_count += 1
 
         violated_constraints = verifier.get("violated_constraints") if isinstance(verifier, dict) else None

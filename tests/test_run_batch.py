@@ -86,7 +86,7 @@ def test_run_batch_writes_canonical_eventlog_and_metrics(tmp_path: Path) -> None
     assert events_by_task_id["task-json-fail"]["flow_tags"] == ["batch", "json"]
     assert events_by_task_id["task-text-2"]["bucket_key"] is None
     assert events_by_task_id["task-text-2"]["flow_tags"] == ["batch"]
-    assert "format_leak" in (events_by_task_id["task-json-fail"]["verifier"]["reason_codes"] or [])
+    assert "FORMAT_LEAK" in (events_by_task_id["task-json-fail"]["verifier"]["reason_codes"] or [])
 
     metrics = summarize_jsonl(out_path)
     assert metrics["total_events"] == 3
@@ -219,7 +219,7 @@ def test_run_batch_contract_tasks_enforce_jsonschema_and_log_contract_summary(tm
     failing = by_task["contract-json-1"]
     assert failing["verifier"]["verdict"] == "FAIL"
     assert failing["verifier"]["outcome"] == "FAIL"
-    assert "schema_violation" in (failing["verifier"]["reason_codes"] or [])
+    assert "SCHEMA_VIOLATION" in (failing["verifier"]["reason_codes"] or [])
     assert failing["verifier"]["layers"]["l1"]["verdict"] == "PASS"
     assert failing["verifier"]["layers"]["l3"]["verdict"] == "FAIL"
     assert failing["run"]["extra"]["contract"] == {

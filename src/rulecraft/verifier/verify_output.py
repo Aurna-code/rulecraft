@@ -7,14 +7,15 @@ from typing import Any, Mapping
 from ..contracts import VerifierResult, pass_from
 from .l1 import verify_text
 from .l3_jsonschema import verify_jsonschema
+from .taxonomy import EXEC_UNAVAILABLE, normalize_codes, vc_jsonschema
 
 
 def _layer_payload(result: VerifierResult) -> dict[str, Any]:
     return {
         "verdict": result.verdict,
         "outcome": result.outcome,
-        "reason_codes": result.reason_codes,
-        "violated_constraints": result.violated_constraints,
+        "reason_codes": normalize_codes(result.reason_codes),
+        "violated_constraints": normalize_codes(result.violated_constraints),
     }
 
 
@@ -41,19 +42,21 @@ def verify_output(mode: str, y_text: str, contract: Mapping[str, Any] | None) ->
                 l3_result = VerifierResult(
                     verdict="FAIL",
                     outcome="FAIL",
-                    reason_codes=["contract_invalid"],
-                    violated_constraints=["contract_schema_missing"],
+                    reason_codes=normalize_codes([EXEC_UNAVAILABLE]),
+                    violated_constraints=normalize_codes([vc_jsonschema("$", "missing_schema")]),
                 )
             layers["l3"] = _layer_payload(l3_result)
             if not _is_pass(l3_result):
                 overall = l3_result
 
+    reason_codes = normalize_codes(overall.reason_codes)
+    violated_constraints = normalize_codes(overall.violated_constraints)
     return {
         "verifier_id": verifier_id,
         "verdict": overall.verdict,
         "outcome": overall.outcome,
-        "reason_codes": overall.reason_codes,
-        "violated_constraints": overall.violated_constraints,
+        "reason_codes": reason_codes,
+        "violated_constraints": violated_constraints,
         "pass": pass_from(overall),
         "layers": layers,
     }

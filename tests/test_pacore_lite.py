@@ -323,7 +323,7 @@ def test_contract_invalid_primary_then_probe_valid_includes_verifier_layers(tmp_
     primary = events[0]
     assert primary["verifier"]["verdict"] == "FAIL"
     assert primary["verifier"]["outcome"] == "FAIL"
-    assert "schema_violation" in (primary["verifier"]["reason_codes"] or [])
+    assert "SCHEMA_VIOLATION" in (primary["verifier"]["reason_codes"] or [])
     assert primary["verifier"]["layers"]["l1"]["verdict"] == "PASS"
     assert primary["verifier"]["layers"]["l3"]["verdict"] == "FAIL"
     assert primary["run"]["extra"]["contract"] == {

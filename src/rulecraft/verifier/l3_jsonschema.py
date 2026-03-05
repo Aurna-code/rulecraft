@@ -9,6 +9,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
 from ..contracts import VerifierResult
+from .taxonomy import JSON_PARSE, SCHEMA_VIOLATION, VC_FORMAT_JSON_PARSE, normalize_codes, vc_jsonschema
 
 
 def _path_string(error: ValidationError) -> str:
@@ -19,7 +20,7 @@ def _path_string(error: ValidationError) -> str:
 
 def _constraint(error: ValidationError) -> str:
     validator_name = error.validator or "validation"
-    return f"jsonschema:{_path_string(error)}:{validator_name}"
+    return vc_jsonschema(_path_string(error), str(validator_name))
 
 
 def verify_jsonschema(y_text: str, schema: dict[str, Any]) -> VerifierResult:
@@ -30,8 +31,8 @@ def verify_jsonschema(y_text: str, schema: dict[str, Any]) -> VerifierResult:
         return VerifierResult(
             verdict="FAIL",
             outcome="UNKNOWN",
-            reason_codes=["json_parse"],
-            violated_constraints=["json_parse"],
+            reason_codes=normalize_codes([JSON_PARSE]),
+            violated_constraints=normalize_codes([VC_FORMAT_JSON_PARSE]),
         )
 
     validator = Draft202012Validator(schema)
@@ -43,8 +44,8 @@ def verify_jsonschema(y_text: str, schema: dict[str, Any]) -> VerifierResult:
         return VerifierResult(
             verdict="FAIL",
             outcome="FAIL",
-            reason_codes=["schema_violation"],
-            violated_constraints=constraints,
+            reason_codes=normalize_codes([SCHEMA_VIOLATION]),
+            violated_constraints=normalize_codes(constraints),
         )
 
     return VerifierResult(

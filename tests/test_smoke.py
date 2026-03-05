@@ -44,5 +44,5 @@ def test_json_mode_parse_failure_records_reason_codes() -> None:
 
     assert verifier["verdict"] == "FAIL"
     assert verifier["outcome"] in {"UNKNOWN", "FAIL"}
-    assert "format_leak" in (verifier["reason_codes"] or [])
-    assert "json_parse" in (verifier["violated_constraints"] or [])
+    assert "FORMAT_LEAK" in (verifier["reason_codes"] or [])
+    assert "FORMAT:JSON_PARSE" in (verifier["violated_constraints"] or [])

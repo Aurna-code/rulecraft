@@ -206,7 +206,7 @@ def test_normalize_coerces_invalid_cost_meta_and_marks_reason_code() -> None:
 
     assert normalized["cost"]["meta"] == {"_raw": "invalid-meta"}
     reason_codes = normalized["verifier"]["reason_codes"] or []
-    assert "cost_meta_coerced" in reason_codes
+    assert "COST_META_COERCED" in reason_codes
 
 
 def test_normalize_converts_string_selected_rules_to_legacy_objects() -> None:

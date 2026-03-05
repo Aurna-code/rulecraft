@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ..verifier.taxonomy import SCHEMA_VIOLATION
+
 
 def build_repair_prompt(
     task_prompt: str,
@@ -19,9 +21,9 @@ def build_repair_prompt(
     contract_violations = [
         str(item)
         for item in constraint_list
-        if isinstance(item, str) and item and item.startswith("jsonschema:")
+        if isinstance(item, str) and item and item.startswith("SCHEMA:JSONSCHEMA:")
     ]
-    has_contract_violation = bool(contract_violations) or "schema_violation" in reason_code_list
+    has_contract_violation = bool(contract_violations) or SCHEMA_VIOLATION in reason_code_list
 
     verifier_context = {
         "reason_codes": reason_code_list,

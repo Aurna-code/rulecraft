@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Literal, Mapping
 
+from ..verifier.taxonomy import FORMAT_LEAK
+
 ScaleTier = Literal["off", "probe", "full"]
 
 
@@ -73,7 +75,8 @@ def should_scale(events_so_far: list[dict[str, Any]], mode: str) -> ScaleTier:
         return "off"
 
     latest = events_so_far[-1]
-    if "format_leak" in _event_reason_codes(latest):
+    latest_reason_codes = _event_reason_codes(latest)
+    if FORMAT_LEAK in latest_reason_codes or "format_leak" in latest_reason_codes:
         return "off"
 
     if any(_event_outcome(event) == "UNKNOWN" for event in events_so_far):

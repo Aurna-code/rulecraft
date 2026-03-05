@@ -6,6 +6,7 @@ import json
 from typing import Literal
 
 from ..contracts import VerifierResult
+from .taxonomy import FORMAT_LEAK, JSON_PARSE, VC_FORMAT_JSON_PARSE, normalize_codes
 
 
 def verify_text(task_mode: Literal["text", "json"], y: str) -> VerifierResult:
@@ -16,8 +17,8 @@ def verify_text(task_mode: Literal["text", "json"], y: str) -> VerifierResult:
             return VerifierResult(
                 verdict="FAIL",
                 outcome="UNKNOWN",
-                reason_codes=["format_leak"],
-                violated_constraints=["json_parse"],
+                reason_codes=normalize_codes([FORMAT_LEAK, JSON_PARSE]),
+                violated_constraints=normalize_codes([VC_FORMAT_JSON_PARSE]),
             )
 
     return VerifierResult(
@@ -26,4 +27,3 @@ def verify_text(task_mode: Literal["text", "json"], y: str) -> VerifierResult:
         reason_codes=None,
         violated_constraints=None,
     )
-

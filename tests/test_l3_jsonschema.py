@@ -31,8 +31,8 @@ def test_verify_jsonschema_fails_for_parse_errors() -> None:
     result = verify_jsonschema("not-json", schema)
     assert result.verdict == "FAIL"
     assert result.outcome == "UNKNOWN"
-    assert "json_parse" in (result.reason_codes or [])
-    assert "json_parse" in (result.violated_constraints or [])
+    assert "JSON_PARSE" in (result.reason_codes or [])
+    assert "FORMAT:JSON_PARSE" in (result.violated_constraints or [])
 
 
 def test_verify_jsonschema_fails_for_schema_violations() -> None:
@@ -49,7 +49,7 @@ def test_verify_jsonschema_fails_for_schema_violations() -> None:
     result = verify_jsonschema('{"status":"ok","count":"3"}', schema)
     assert result.verdict == "FAIL"
     assert result.outcome == "FAIL"
-    assert "schema_violation" in (result.reason_codes or [])
+    assert "SCHEMA_VIOLATION" in (result.reason_codes or [])
     constraints = result.violated_constraints or []
     assert constraints
-    assert all(item.startswith("jsonschema:") for item in constraints)
+    assert all(item.startswith("SCHEMA:JSONSCHEMA:") for item in constraints)
