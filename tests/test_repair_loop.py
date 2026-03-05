@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from rulecraft.adapters.scripted import ScriptedAdapter
+from rulecraft.policy.repair_loop import build_repair_prompt
 from rulecraft.runner.batch import run_batch
 
 
@@ -70,3 +71,21 @@ def test_run_batch_repair_loop_writes_two_attempts_with_metadata(tmp_path: Path)
     assert second["run"]["extra"]["task_id"] == "task-repair-1"
     assert second["run"]["extra"]["attempt_idx"] == 1
     assert second["run"]["extra"]["phase"] == "repair"
+
+
+def test_build_repair_prompt_includes_contract_violation_hint() -> None:
+    prompt, instructions = build_repair_prompt(
+        task_prompt="Return JSON with status and count.",
+        mode="json",
+        last_output='{"status":"ok","count":"1"}',
+        verifier={
+            "verdict": "FAIL",
+            "outcome": "FAIL",
+            "reason_codes": ["schema_violation"],
+            "violated_constraints": ["jsonschema:$.count:type"],
+        },
+    )
+
+    assert instructions == "Return JSON that satisfies the contract. Output JSON only."
+    assert "Contract violations:" in prompt
+    assert "jsonschema:$.count:type" in prompt

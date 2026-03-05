@@ -10,7 +10,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from rulecraft.adapters.scripted import ScriptedAdapter
-from rulecraft.contracts import VerifierResult
 from rulecraft.runner import batch as batch_runner
 from rulecraft.runner.batch import estimate_full_cost_usd
 from rulecraft.runner.batch import run_batch
@@ -163,16 +162,32 @@ def test_probe_pass_unknown_escalates_to_full_when_budget_allows(
     out_path = tmp_path / "eventlog_probe_pass_unknown.jsonl"
     _write_single_json_task(tasks_path, task_id="task-probe-pass-unknown")
 
-    original_verify_text = batch_runner.verify_text
+    original_verify_output = batch_runner.verify_output
 
-    def _verify_text_with_weak_probe(task_mode: str, y: str) -> VerifierResult:
-        if y == "probe-weak-pass":
-            return VerifierResult(verdict="PASS", outcome="UNKNOWN", reason_codes=None, violated_constraints=None)
-        if y == "full-strong-pass":
-            return VerifierResult(verdict="PASS", outcome="OK", reason_codes=None, violated_constraints=None)
-        return original_verify_text(task_mode=task_mode, y=y)
+    def _verify_output_with_weak_probe(mode: str, y_text: str, contract: dict[str, object] | None) -> dict[str, object]:
+        if y_text == "probe-weak-pass":
+            return {
+                "verifier_id": "vf_test",
+                "verdict": "PASS",
+                "outcome": "UNKNOWN",
+                "reason_codes": None,
+                "violated_constraints": None,
+                "pass": 1,
+                "layers": {"l1": {"verdict": "PASS", "outcome": "OK", "reason_codes": None, "violated_constraints": None}},
+            }
+        if y_text == "full-strong-pass":
+            return {
+                "verifier_id": "vf_test",
+                "verdict": "PASS",
+                "outcome": "OK",
+                "reason_codes": None,
+                "violated_constraints": None,
+                "pass": 1,
+                "layers": {"l1": {"verdict": "PASS", "outcome": "OK", "reason_codes": None, "violated_constraints": None}},
+            }
+        return original_verify_output(mode=mode, y_text=y_text, contract=contract)
 
-    monkeypatch.setattr(batch_runner, "verify_text", _verify_text_with_weak_probe)
+    monkeypatch.setattr(batch_runner, "verify_output", _verify_output_with_weak_probe)
 
     adapter = ScriptedAdapter(
         scripts={"task-probe-pass-unknown": ["not-json"]},
@@ -252,6 +267,75 @@ def test_projected_full_cost_can_block_escalation(tmp_path: Path) -> None:
     assert (spent_usd + probe_cost_usd) <= budget_usd
     projected_full_usd = estimate_full_cost_usd(probe_cost_usd, k_probe=2, k_full=8, used_synth=False)
     assert (spent_usd + projected_full_usd) > budget_usd
+
+
+def test_contract_invalid_primary_then_probe_valid_includes_verifier_layers(tmp_path: Path) -> None:
+    tasks_path = tmp_path / "tasks_contract_scale.jsonl"
+    out_path = tmp_path / "eventlog_contract_scale.jsonl"
+    tasks_path.write_text(
+        json.dumps(
+            {
+                "task_id": "task-contract-scale",
+                "prompt": "Return JSON status and count.",
+                "mode": "json",
+                "contract": {
+                    "type": "jsonschema",
+                    "schema_id": "contract.status_count.v1",
+                    "schema": {
+                        "type": "object",
+                        "required": ["status", "count"],
+                        "properties": {
+                            "status": {"type": "string"},
+                            "count": {"type": "integer"},
+                        },
+                        "additionalProperties": False,
+                    },
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    adapter = ScriptedAdapter(
+        scripts={"task-contract-scale": ['{"status":"ok","count":"1"}']},
+        phase_scripts={
+            "task-contract-scale": {
+                "scale_probe_candidate": ['{"status":"ok","count":1}', '{"status":"ok","count":"2"}'],
+            }
+        },
+    )
+
+    summary = run_batch(
+        tasks_path=tasks_path,
+        adapter=adapter,
+        out_path=out_path,
+        scale="probe",
+        k_probe=2,
+        top_m=2,
+        synth=False,
+    )
+    assert summary == {"total": 1, "passed": 1, "failed": 0, "unknown": 0}
+
+    events = _load_events(out_path)
+    assert [event["run"]["extra"]["phase"] for event in events] == ["primary", "scale_probe"]
+
+    primary = events[0]
+    assert primary["verifier"]["verdict"] == "FAIL"
+    assert primary["verifier"]["outcome"] == "FAIL"
+    assert "schema_violation" in (primary["verifier"]["reason_codes"] or [])
+    assert primary["verifier"]["layers"]["l1"]["verdict"] == "PASS"
+    assert primary["verifier"]["layers"]["l3"]["verdict"] == "FAIL"
+    assert primary["run"]["extra"]["contract"] == {
+        "type": "jsonschema",
+        "schema_id": "contract.status_count.v1",
+        "has_schema": True,
+    }
+
+    probe = events[1]
+    assert probe["verifier"]["verdict"] == "PASS"
+    assert probe["verifier"]["outcome"] == "OK"
+    assert probe["verifier"]["layers"]["l3"]["verdict"] == "PASS"
 
 
 def test_synth_prompt_includes_rule_context_block() -> None:

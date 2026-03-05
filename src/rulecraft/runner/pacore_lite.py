@@ -6,8 +6,7 @@ import json
 from collections import Counter
 from typing import Any, Literal, Mapping
 
-from ..contracts import VerifierResult
-from ..verifier import verify_text
+from ..verifier.verify_output import verify_output
 from .rollout_rank import rank_candidates
 
 TaskMode = Literal["text", "json"]
@@ -33,16 +32,6 @@ def _coerce_optional_float(value: object) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
-
-
-def _verifier_to_dict(result: VerifierResult) -> dict[str, Any]:
-    return {
-        "verdict": result.verdict,
-        "outcome": result.outcome,
-        "reason_codes": result.reason_codes,
-        "violated_constraints": result.violated_constraints,
-        "pass": int(result.verdict == "PASS" and result.outcome != "FAIL"),
-    }
 
 
 def _verifier_is_pass(verifier: Mapping[str, Any]) -> bool:
@@ -213,6 +202,7 @@ def run_pacore_lite(
     use_synth: bool,
     instructions: str | None,
     selected_rules: list[object],
+    contract: Mapping[str, Any] | None = None,
     *,
     tier: str | None = None,
     task_id: str | None = None,
@@ -243,8 +233,7 @@ def run_pacore_lite(
         )
         call_metas.append(meta)
 
-        verifier_result = verify_text(task_mode=task_mode, y=text)
-        verifier = _verifier_to_dict(verifier_result)
+        verifier = verify_output(mode=task_mode, y_text=text, contract=contract)
         candidates.append(
             {
                 "y": text,
@@ -291,8 +280,7 @@ def run_pacore_lite(
         )
         call_metas.append(synth_meta)
 
-        synth_result = verify_text(task_mode=task_mode, y=synth_text)
-        synth_verifier = _verifier_to_dict(synth_result)
+        synth_verifier = verify_output(mode=task_mode, y_text=synth_text, contract=contract)
         synth_verdict = str(synth_verifier.get("verdict"))
         synth_outcome = str(synth_verifier.get("outcome"))
 

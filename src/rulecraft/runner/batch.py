@@ -16,10 +16,9 @@ from ..policy.repair_loop import build_repair_prompt
 from ..policy.should_scale import ScaleTier, escalate_to_full, should_scale
 from ..rulebook.select import RuleSelectRequest, select_rules
 from ..rulebook.store import RulebookStore
-from ..verifier import verify_text
+from ..verifier.verify_output import verify_output
 from .pacore_lite import run_pacore_lite
 
-TaskMode = Literal["text", "json"]
 ScaleMode = Literal["off", "auto", "probe", "full"]
 
 
@@ -59,6 +58,56 @@ def _coerce_flow_tags(value: object) -> list[str] | None:
     if not tags:
         return None
     return tags
+
+
+def _verifier_is_pass(verifier: Mapping[str, Any]) -> bool:
+    return pass_from(verifier) == 1
+
+
+def _verifier_outcome(verifier: Mapping[str, Any]) -> str:
+    outcome = verifier.get("outcome")
+    if isinstance(outcome, str) and outcome:
+        return outcome
+    return "UNKNOWN"
+
+
+def _normalize_task_contract(contract: object, *, line_no: int, path: Path) -> dict[str, Any] | None:
+    if contract is None:
+        return None
+    if not isinstance(contract, Mapping):
+        raise ValueError(f"Task on line {line_no} in {path} has invalid 'contract' type.")
+
+    contract_type = contract.get("type")
+    if contract_type != "jsonschema":
+        raise ValueError(f"Task on line {line_no} in {path} has unsupported contract type.")
+
+    schema = contract.get("schema")
+    if not isinstance(schema, Mapping):
+        raise ValueError(f"Task on line {line_no} in {path} must include object 'contract.schema'.")
+
+    schema_id_raw = contract.get("schema_id")
+    if schema_id_raw is None:
+        schema_id = None
+    elif isinstance(schema_id_raw, str):
+        schema_id = schema_id_raw or None
+    else:
+        schema_id = str(schema_id_raw)
+
+    return {
+        "type": "jsonschema",
+        "schema": dict(schema),
+        "schema_id": schema_id,
+    }
+
+
+def _contract_log_summary(contract: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(contract, Mapping):
+        return None
+    return {
+        "type": contract.get("type"),
+        "schema_id": contract.get("schema_id"),
+        "has_schema": isinstance(contract.get("schema"), Mapping),
+    }
 
 
 def _extract_terms(text: str) -> set[str]:
@@ -165,13 +214,6 @@ def _event_cost_usage(event_payload: Mapping[str, Any]) -> tuple[float, int]:
     return cost_usd, token_total
 
 
-def _event_is_pass(event_payload: Mapping[str, Any]) -> bool:
-    verifier = event_payload.get("verifier")
-    if isinstance(verifier, Mapping):
-        return pass_from(verifier) == 1
-    return False
-
-
 def _cost_meta_from_adapter(meta: Mapping[str, Any]) -> dict[str, Any]:
     cost_meta = {
         "backend": meta.get("backend", "unknown"),
@@ -260,6 +302,7 @@ def _iter_tasks(tasks_path: str | Path, limit: int | None) -> Iterator[dict[str,
                 bucket_key = None
 
             flow_tags = _coerce_flow_tags(payload.get("flow_tags"))
+            contract = _normalize_task_contract(payload.get("contract"), line_no=line_no, path=path)
 
             yield {
                 "task_id": task_id,
@@ -267,6 +310,7 @@ def _iter_tasks(tasks_path: str | Path, limit: int | None) -> Iterator[dict[str,
                 "mode": mode,
                 "bucket_key": bucket_key,
                 "flow_tags": flow_tags,
+                "contract": contract,
             }
 
             task_count += 1
@@ -349,6 +393,12 @@ def run_batch(
     for task in _iter_tasks(tasks_path, limit):
         prompt = str(task["prompt"])
         mode = str(task["mode"])
+        task_contract = task.get("contract")
+        if isinstance(task_contract, Mapping):
+            normalized_contract: dict[str, Any] | None = dict(task_contract)
+        else:
+            normalized_contract = None
+        contract_summary = _contract_log_summary(normalized_contract)
         trace_id = str(uuid.uuid4())
         task_id = str(task["task_id"])
         selected_rules = _select_rules_for_task(task, rulebook_store)
@@ -379,7 +429,7 @@ def run_batch(
             *,
             attempt_idx: int,
             phase: str,
-            verifier_result: Any,
+            verifier_result: Mapping[str, Any],
             meta: Mapping[str, Any],
             scale_meta: Mapping[str, Any] | None = None,
             rollout: Mapping[str, Any] | None = None,
@@ -390,6 +440,8 @@ def run_batch(
                 "phase": phase,
                 "max_attempts": attempts_limit,
             }
+            if contract_summary is not None:
+                run_extra["contract"] = dict(contract_summary)
             if scale_meta is not None:
                 run_extra["scale"] = dict(scale_meta)
 
@@ -409,14 +461,7 @@ def run_batch(
                     "extra": run_extra,
                 },
                 outputs=outputs,
-                verifier={
-                    "verifier_id": "vf_l1_v1",
-                    "verdict": verifier_result.verdict,
-                    "outcome": verifier_result.outcome,
-                    "reason_codes": verifier_result.reason_codes,
-                    "violated_constraints": verifier_result.violated_constraints,
-                    "pass": pass_from(verifier_result),
-                },
+                verifier=dict(verifier_result),
                 cost={
                     "latency_ms": _coerce_optional_int(meta.get("latency_ms")),
                     "tokens_in": _coerce_optional_int(meta.get("tokens_in")),
@@ -446,7 +491,7 @@ def run_batch(
                 attempt_idx=attempt_idx,
                 phase=phase,
             )
-            verifier_result = verify_text(task_mode=mode, y=text)
+            verifier_result = verify_output(mode=mode, y_text=text, contract=normalized_contract)
             final_verifier_result = verifier_result
             event_payload = log_attempt_event(
                 attempt_idx=attempt_idx,
@@ -455,7 +500,7 @@ def run_batch(
                 meta=meta,
             )
 
-            if verifier_result.verdict == "PASS" and verifier_result.outcome != "FAIL":
+            if _verifier_is_pass(verifier_result):
                 break
             if not repair:
                 break
@@ -463,10 +508,10 @@ def run_batch(
                 break
 
             verifier_payload = {
-                "verdict": verifier_result.verdict,
-                "outcome": verifier_result.outcome,
-                "reason_codes": verifier_result.reason_codes,
-                "violated_constraints": verifier_result.violated_constraints,
+                "verdict": verifier_result.get("verdict"),
+                "outcome": verifier_result.get("outcome"),
+                "reason_codes": verifier_result.get("reason_codes"),
+                "violated_constraints": verifier_result.get("violated_constraints"),
             }
             repair_prompt, repair_instructions = build_repair_prompt(
                 task_prompt=primary_prompt,
@@ -480,9 +525,7 @@ def run_batch(
             else:
                 attempt_instructions = repair_instructions or instructions
 
-        task_passed = final_verifier_result is not None and (
-            final_verifier_result.verdict == "PASS" and final_verifier_result.outcome != "FAIL"
-        )
+        task_passed = final_verifier_result is not None and _verifier_is_pass(final_verifier_result)
         if not task_passed and scale_mode != "off":
             tier: ScaleTier
             if scale_mode in {"probe", "full"}:
@@ -501,11 +544,12 @@ def run_batch(
                     use_synth=bool(synth),
                     instructions=instructions,
                     selected_rules=selected_rules,
+                    contract=normalized_contract,
                     tier="probe",
                     task_id=task_id,
                     attempt_idx=probe_attempt_idx,
                 )
-                probe_verifier = verify_text(task_mode=mode, y=probe_text)
+                probe_verifier = verify_output(mode=mode, y_text=probe_text, contract=normalized_contract)
                 final_verifier_result = probe_verifier
 
                 probe_scale_meta = _rollout_summary(probe_meta)
@@ -543,11 +587,12 @@ def run_batch(
                         use_synth=bool(synth),
                         instructions=instructions,
                         selected_rules=selected_rules,
+                        contract=normalized_contract,
                         tier="full",
                         task_id=task_id,
                         attempt_idx=full_attempt_idx,
                     )
-                    full_verifier = verify_text(task_mode=mode, y=full_text)
+                    full_verifier = verify_output(mode=mode, y_text=full_text, contract=normalized_contract)
                     final_verifier_result = full_verifier
 
                     full_scale_meta = _rollout_summary(full_meta)
@@ -575,11 +620,12 @@ def run_batch(
                         use_synth=bool(synth),
                         instructions=instructions,
                         selected_rules=selected_rules,
+                        contract=normalized_contract,
                         tier="full",
                         task_id=task_id,
                         attempt_idx=full_attempt_idx,
                     )
-                    full_verifier = verify_text(task_mode=mode, y=full_text)
+                    full_verifier = verify_output(mode=mode, y_text=full_text, contract=normalized_contract)
                     final_verifier_result = full_verifier
 
                     full_scale_meta = _rollout_summary(full_meta)
@@ -598,9 +644,9 @@ def run_batch(
         summary["total"] += 1
         if final_verifier_result is None:
             continue
-        if final_verifier_result.verdict == "PASS" and final_verifier_result.outcome != "FAIL":
+        if _verifier_is_pass(final_verifier_result):
             summary["passed"] += 1
-        elif final_verifier_result.outcome == "UNKNOWN":
+        elif _verifier_outcome(final_verifier_result) == "UNKNOWN":
             summary["unknown"] += 1
         else:
             summary["failed"] += 1
