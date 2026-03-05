@@ -21,6 +21,7 @@ from .policy.suggest import suggest_policy
 from .runner.batch import run_batch
 from .runner.promote import run_promotion
 from .runner.promote_rules import run_rule_promotion
+from .rulebook.lint import lint_rulebook
 from .rulebook.suggest import suggest_rules
 from .rulebook.store import RulebookStore
 from .verifier.cache import SqliteVerifierCache
@@ -156,6 +157,14 @@ def _build_promote_rules_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=None, help="Optional seed metadata for reproducibility.")
     parser.add_argument("--report", default=None, help="Optional output JSON report path.")
     parser.add_argument("--fail-on-regression", action="store_true", help="Return exit code 3 on promotion regressions.")
+    return parser
+
+
+def _build_rule_lint_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Lint rulebook quality and detect duplicates/conflicts.")
+    parser.add_argument("--rulebook", required=True, help="Rulebook JSON path.")
+    parser.add_argument("--eventlog", default=None, help="Optional EventLog JSONL path for usage-aware checks.")
+    parser.add_argument("--strict", action="store_true", help="Treat warnings as lint failures.")
     return parser
 
 
@@ -298,6 +307,30 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         else:
             print("Suggested rules written.", file=sys.stderr)
+        return 0
+    if raw_argv and raw_argv[0] == "rule-lint":
+        parser = _build_rule_lint_parser()
+        args = parser.parse_args(raw_argv[1:])
+        try:
+            payload_raw = json.loads(Path(args.rulebook).read_text(encoding="utf-8"))
+        except Exception as exc:  # pragma: no cover - parser error path
+            parser.error(f"failed to parse rulebook from {args.rulebook!r}: {exc}")
+            return 2
+
+        if isinstance(payload_raw, list):
+            payload = {"rules": payload_raw}
+        elif isinstance(payload_raw, dict):
+            payload = payload_raw
+        else:
+            payload = {"rules": []}
+
+        result = lint_rulebook(payload, eventlog_path=args.eventlog)
+        error_count = len(result.get("errors", [])) if isinstance(result.get("errors"), list) else 0
+        warning_count = len(result.get("warnings", [])) if isinstance(result.get("warnings"), list) else 0
+        print(f"rule-lint: {error_count} error(s), {warning_count} warning(s)", file=sys.stderr)
+        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        if error_count > 0 or (args.strict and warning_count > 0):
+            return 4
         return 0
     if raw_argv and raw_argv[0] == "promote":
         parser = _build_promote_parser()
