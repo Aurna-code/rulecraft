@@ -4,6 +4,7 @@ from .budget import BudgetController
 from .budget_router import BudgetState, should_attempt_repair
 from .repair import build_json_repair_messages
 from .repair_loop import build_repair_prompt
+from .should_scale import ScaleTier, escalate_to_full, should_scale
 
 __all__ = [
     "BudgetController",
@@ -11,4 +12,7 @@ __all__ = [
     "should_attempt_repair",
     "build_json_repair_messages",
     "build_repair_prompt",
+    "ScaleTier",
+    "should_scale",
+    "escalate_to_full",
 ]
