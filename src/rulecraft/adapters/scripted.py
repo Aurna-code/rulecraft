@@ -13,6 +13,8 @@ class ScriptedAdapter:
         scripts: Mapping[str, Sequence[str]],
         default_text: str = "scripted-default-output",
         phase_scripts: Mapping[str, Mapping[str, Sequence[str]]] | None = None,
+        cost_usd: float = 0.0,
+        phase_costs_usd: Mapping[str, float] | None = None,
     ) -> None:
         self.scripts = {str(task_id): [str(item) for item in outputs] for task_id, outputs in scripts.items()}
         self.phase_scripts = {
@@ -20,6 +22,8 @@ class ScriptedAdapter:
             for task_id, phases in (phase_scripts or {}).items()
         }
         self.default_text = default_text
+        self.cost_usd = float(cost_usd)
+        self.phase_costs_usd = {str(phase): float(value) for phase, value in (phase_costs_usd or {}).items()}
         self.calls: list[dict[str, Any]] = []
         self._phase_indices: dict[tuple[str, str], int] = {}
 
@@ -63,13 +67,14 @@ class ScriptedAdapter:
             else:
                 text = self.default_text
 
+        cost_usd = self.phase_costs_usd.get(phase_key, self.cost_usd)
         meta = {
             "backend": "scripted",
             "model": "scripted",
             "latency_ms": 0,
             "tokens_in": 0,
             "tokens_out": max(len(text) // 4, 1),
-            "cost_usd": 0.0,
+            "cost_usd": cost_usd,
             "error": None,
         }
         return text, meta

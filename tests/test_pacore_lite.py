@@ -4,10 +4,15 @@ import json
 from pathlib import Path
 import sys
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from rulecraft.adapters.scripted import ScriptedAdapter
+from rulecraft.contracts import VerifierResult
+from rulecraft.runner import batch as batch_runner
+from rulecraft.runner.batch import estimate_full_cost_usd
 from rulecraft.runner.batch import run_batch
 
 
@@ -147,3 +152,102 @@ def test_budget_can_block_full_after_probe(tmp_path: Path) -> None:
     assert probe_event["run"]["extra"]["scale"]["k"] == 2
     assert probe_event["run"]["extra"]["scale"]["top_m"] == 2
     assert probe_event["run"]["extra"]["scale"]["used_synth"] is False
+
+
+def test_probe_pass_unknown_escalates_to_full_when_budget_allows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tasks_path = tmp_path / "tasks_probe_pass_unknown.jsonl"
+    out_path = tmp_path / "eventlog_probe_pass_unknown.jsonl"
+    _write_single_json_task(tasks_path, task_id="task-probe-pass-unknown")
+
+    original_verify_text = batch_runner.verify_text
+
+    def _verify_text_with_weak_probe(task_mode: str, y: str) -> VerifierResult:
+        if y == "probe-weak-pass":
+            return VerifierResult(verdict="PASS", outcome="UNKNOWN", reason_codes=None, violated_constraints=None)
+        if y == "full-strong-pass":
+            return VerifierResult(verdict="PASS", outcome="OK", reason_codes=None, violated_constraints=None)
+        return original_verify_text(task_mode=task_mode, y=y)
+
+    monkeypatch.setattr(batch_runner, "verify_text", _verify_text_with_weak_probe)
+
+    adapter = ScriptedAdapter(
+        scripts={"task-probe-pass-unknown": ["not-json"]},
+        phase_scripts={
+            "task-probe-pass-unknown": {
+                "scale_probe_candidate": ["probe-weak-pass", "not-json-probe"],
+                "scale_full_candidate": ["full-strong-pass", "not-json-full"],
+            }
+        },
+    )
+
+    summary = run_batch(
+        tasks_path=tasks_path,
+        adapter=adapter,
+        out_path=out_path,
+        scale="probe",
+        k_probe=2,
+        k_full=2,
+        top_m=2,
+        synth=False,
+        budget_usd=1.0,
+    )
+    assert summary == {"total": 1, "passed": 1, "failed": 0, "unknown": 0}
+
+    events = _load_events(out_path)
+    phases = [event["run"]["extra"]["phase"] for event in events]
+    assert phases == ["primary", "scale_probe", "scale_full"]
+    assert events[1]["verifier"]["verdict"] == "PASS"
+    assert events[1]["verifier"]["outcome"] == "UNKNOWN"
+    assert events[2]["verifier"]["verdict"] == "PASS"
+    assert events[2]["verifier"]["outcome"] == "OK"
+
+
+def test_projected_full_cost_can_block_escalation(tmp_path: Path) -> None:
+    tasks_path = tmp_path / "tasks_budget_projection_block.jsonl"
+    out_path = tmp_path / "eventlog_budget_projection_block.jsonl"
+    _write_single_json_task(tasks_path, task_id="task-budget-projection-block")
+
+    adapter = ScriptedAdapter(
+        scripts={"task-budget-projection-block": ["not-json"]},
+        phase_scripts={
+            "task-budget-projection-block": {
+                "scale_probe_candidate": ["bad-a", "bad-b"],
+                "scale_full_candidate": ['{"status":"ok"}'],
+            }
+        },
+        cost_usd=0.1,
+    )
+
+    budget_usd = 0.55
+    summary = run_batch(
+        tasks_path=tasks_path,
+        adapter=adapter,
+        out_path=out_path,
+        scale="probe",
+        k_probe=2,
+        k_full=8,
+        top_m=2,
+        synth=False,
+        budget_usd=budget_usd,
+    )
+    assert summary == {"total": 1, "passed": 0, "failed": 0, "unknown": 1}
+
+    events = _load_events(out_path)
+    phases = [event["run"]["extra"]["phase"] for event in events]
+    assert phases == ["primary", "scale_probe"]
+
+    spent_usd = 0.0
+    for event in events:
+        meta = event["cost"].get("meta", {})
+        event_cost = meta.get("cost_usd")
+        if isinstance(event_cost, (int, float)):
+            spent_usd += float(event_cost)
+    probe_cost_usd = float(events[1]["cost"]["meta"]["cost_usd"])
+
+    # Old one-step budget gating would allow one more probe-sized attempt.
+    assert (spent_usd + probe_cost_usd) <= budget_usd
+    projected_full_usd = estimate_full_cost_usd(probe_cost_usd, k_probe=2, k_full=8, used_synth=False)
+    assert (spent_usd + projected_full_usd) > budget_usd

@@ -198,6 +198,22 @@ def _scale_budget_ok(state: BudgetState, last_event: Mapping[str, Any]) -> bool:
     return True
 
 
+def estimate_full_cost_usd(
+    last_scale_event_cost_usd: float,
+    k_probe: int,
+    k_full: int,
+    used_synth: bool,
+) -> float:
+    """Estimate full rollout USD from the probe rollout event cost."""
+    base = max(float(last_scale_event_cost_usd), 0.0)
+    probe_count = max(int(k_probe), 1)
+    ratio = max(float(k_full) / probe_count, 1.0)
+    projected = base * ratio
+    if used_synth:
+        projected += base / probe_count
+    return projected
+
+
 def _rollout_summary(scale_meta: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "tier": scale_meta.get("tier"),
@@ -505,7 +521,18 @@ def run_batch(
                     rollout=probe_scale_meta,
                 )
 
-                if escalate_to_full(dict(probe_event), budget_ok=_scale_budget_ok(budget_state, probe_event)):
+                budget_ok_for_full = _scale_budget_ok(budget_state, probe_event)
+                if budget_ok_for_full and budget_state.budget_usd is not None:
+                    probe_cost_usd, _ = _event_cost_usage(probe_event)
+                    projected_full_usd = estimate_full_cost_usd(
+                        probe_cost_usd,
+                        k_probe=int(k_probe),
+                        k_full=int(k_full),
+                        used_synth=bool(synth),
+                    )
+                    budget_ok_for_full = (budget_state.spent_usd + projected_full_usd) <= budget_state.budget_usd
+
+                if escalate_to_full(dict(probe_event), budget_ok=budget_ok_for_full):
                     full_attempt_idx = budget_state.attempts_used
                     full_text, full_meta = run_pacore_lite(
                         primary_prompt,
