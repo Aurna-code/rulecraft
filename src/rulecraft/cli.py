@@ -16,6 +16,7 @@ from .adapters.tape import TapeRecorderAdapter, TapeReplayAdapter
 from .analysis.diff_runs import diff_runs
 from .analysis.flowmap import analyze_flowmap
 from .analysis.regpack import build_regpack
+from .analysis.trace_view import render_task_trace
 from .metrics.eventlog_metrics import summarize_jsonl
 from .orchestrator import Orchestrator
 from .policy.profile import load_profile
@@ -75,6 +76,14 @@ def _build_flowmap_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Analyze EventLog JSONL into offline FlowMap risk/opportunity maps.")
     parser.add_argument("--path", default=".rulecraft/eventlog.jsonl", help="EventLog JSONL file path.")
     parser.add_argument("--group-by", choices=("bucket_key",), default="bucket_key", help="Grouping dimension.")
+    return parser
+
+
+def _build_trace_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Render a per-task timeline from EventLog JSONL.")
+    parser.add_argument("--path", required=True, help="EventLog JSONL file path.")
+    parser.add_argument("--task-id", required=True, help="Task id to render.")
+    parser.add_argument("--max-lines", type=int, default=None, help="Optional output line cap.")
     return parser
 
 
@@ -625,6 +634,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         args = parser.parse_args(raw_argv[1:])
         summary = analyze_flowmap(args.path, group_by=args.group_by)
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+    if raw_argv and raw_argv[0] == "trace":
+        parser = _build_trace_parser()
+        args = parser.parse_args(raw_argv[1:])
+        if args.max_lines is not None and args.max_lines < 1:
+            parser.error("--max-lines must be >= 1")
+        output = render_task_trace(args.path, args.task_id)
+        if args.max_lines is not None:
+            output = "\n".join(output.splitlines()[: int(args.max_lines)])
+        print(output)
         return 0
 
     parser = _build_parser()

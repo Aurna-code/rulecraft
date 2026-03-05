@@ -57,6 +57,12 @@ python -m rulecraft metrics --path .rulecraft/eventlog.jsonl --task-metrics
 
 Task pass semantics: a task is counted as passed when any attempt for that task passes.
 
+Render a compact per-task timeline from EventLog JSONL:
+
+```bash
+python -m rulecraft trace --path .rulecraft/eventlog.jsonl --task-id task-123
+```
+
 ## Batch Experiments
 
 Run a batch with the local stub adapter:
@@ -90,6 +96,28 @@ python -m rulecraft run-batch \
   --out .rulecraft/batch_eventlog_scale_auto.jsonl \
   --scale auto
 ```
+
+Record adapter requests/responses to an adapter tape file:
+
+```bash
+python -m rulecraft run-batch \
+  --tasks examples/tasks/sample_tasks.jsonl \
+  --adapter openai \
+  --out .rulecraft/batch_eventlog_openai.jsonl \
+  --tape-out .rulecraft/adapter.tape.jsonl
+```
+
+Replay the same batch deterministically offline:
+
+```bash
+python -m rulecraft run-batch \
+  --tasks examples/tasks/sample_tasks.jsonl \
+  --adapter tape \
+  --tape-in .rulecraft/adapter.tape.jsonl \
+  --out .rulecraft/batch_eventlog_replay.jsonl
+```
+
+`--tape-in` also auto-enables replay mode for non-`tape` adapters.
 
 Choose explicit scaling tiers:
 
@@ -286,6 +314,24 @@ python -m rulecraft replay --manifest .rulecraft/evolve/run1/manifest.json
 ```
 
 By default replay writes to `.rulecraft/evolve/run1/replay`. Override with `--outdir` when needed.
+
+Record all evolve adapter calls:
+
+```bash
+python -m rulecraft evolve \
+  --tasks examples/tasks/evolve_smoke_tasks.jsonl \
+  --adapter stub \
+  --outdir .rulecraft/evolve/run1 \
+  --tape-out adapter.tape.jsonl
+```
+
+Replay evolve offline from tape:
+
+```bash
+python -m rulecraft replay \
+  --manifest .rulecraft/evolve/run1/manifest.json \
+  --tape-in .rulecraft/evolve/run1/adapter.tape.jsonl
+```
 
 How to read `summary.json`:
 
