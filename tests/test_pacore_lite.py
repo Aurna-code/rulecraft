@@ -14,6 +14,7 @@ from rulecraft.contracts import VerifierResult
 from rulecraft.runner import batch as batch_runner
 from rulecraft.runner.batch import estimate_full_cost_usd
 from rulecraft.runner.batch import run_batch
+from rulecraft.runner.pacore_lite import run_pacore_lite
 
 
 def _write_single_json_task(path: Path, task_id: str) -> None:
@@ -251,3 +252,45 @@ def test_projected_full_cost_can_block_escalation(tmp_path: Path) -> None:
     assert (spent_usd + probe_cost_usd) <= budget_usd
     projected_full_usd = estimate_full_cost_usd(probe_cost_usd, k_probe=2, k_full=8, used_synth=False)
     assert (spent_usd + projected_full_usd) > budget_usd
+
+
+def test_synth_prompt_includes_rule_context_block() -> None:
+    adapter = ScriptedAdapter(
+        scripts={"task-synth-context": ["fallback"]},
+        phase_scripts={
+            "task-synth-context": {
+                "scale_probe_candidate": ['{"status":"candidate-a"}', '{"status":"candidate-b"}'],
+                "scale_probe_synth": ['{"status":"synth"}'],
+            }
+        },
+    )
+
+    selected_rules = [
+        {
+            "rule_id": "RULE-42",
+            "type": "GuardrailRule",
+            "injection_mode": "prepend",
+            "body": "Always return safe JSON.",
+        }
+    ]
+
+    _, meta = run_pacore_lite(
+        prompt="Return JSON with status.",
+        mode="json",
+        adapter=adapter,
+        k=2,
+        top_m=2,
+        use_synth=True,
+        instructions=None,
+        selected_rules=selected_rules,
+        tier="probe",
+        task_id="task-synth-context",
+        attempt_idx=1,
+    )
+    assert meta["used_synth"] is True
+
+    synth_calls = [call for call in adapter.calls if call.get("phase") == "scale_probe_synth"]
+    assert len(synth_calls) == 1
+    synth_prompt = synth_calls[0]["prompt"]
+    assert "Rulecraft Context" in synth_prompt
+    assert "RULE-42" in synth_prompt

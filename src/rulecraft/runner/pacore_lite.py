@@ -74,17 +74,49 @@ def _compact_candidate(mode: TaskMode, text: str, max_chars: int = 800) -> str:
     return _compact_text(text, max_chars=max_chars)
 
 
-def _build_synth_prompt(mode: TaskMode, summaries: list[str]) -> str:
+def _build_synth_prompt(mode: TaskMode, summaries: list[str], selected_rules: list[object]) -> str:
+    rule_context = _build_rule_context_block(selected_rules)
     lines = [
         "Synthesize the best final answer that satisfies constraints. Output JSON only if mode=json.",
         f"mode={mode}",
         "",
-        "Candidate summaries:",
     ]
+    if rule_context is not None:
+        lines.extend(
+            [
+                "Rulecraft Context",
+                rule_context,
+                "",
+            ]
+        )
+    lines.append("Candidate summaries:")
     for idx, summary in enumerate(summaries, start=1):
         lines.append(f"[Candidate {idx}]")
         lines.append(summary)
     return "\n".join(lines).strip()
+
+
+def _build_rule_context_block(selected_rules: list[object]) -> str | None:
+    compact_rules: list[dict[str, str]] = []
+    for rule in selected_rules:
+        if not isinstance(rule, Mapping):
+            continue
+
+        rule_id = str(rule.get("rule_id", "")).strip()
+        if not rule_id:
+            continue
+
+        compact_rules.append(
+            {
+                "rule_id": rule_id,
+                "type": str(rule.get("type", "UnknownRule")),
+                "injection_mode": str(rule.get("injection_mode", "prepend")),
+            }
+        )
+
+    if not compact_rules:
+        return None
+    return json.dumps(compact_rules, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
 def _generate_with_fallback(
@@ -187,8 +219,6 @@ def run_pacore_lite(
     attempt_idx: int = 0,
 ) -> tuple[str, dict[str, Any]]:
     """Run PaCoRe-lite and return the chosen final output plus compact rollout metadata."""
-    del selected_rules  # Reserved for future prompt-aware synthesis.
-
     task_mode: TaskMode = "json" if mode == "json" else "text"
     effective_k = max(int(k), 1)
     effective_top_m = max(int(top_m), 1)
@@ -248,7 +278,7 @@ def run_pacore_lite(
     if use_synth and selected:
         used_synth = True
         summaries = [_compact_candidate(task_mode, str(candidate.get("y", ""))) for candidate in selected]
-        synth_prompt = _build_synth_prompt(task_mode, summaries)
+        synth_prompt = _build_synth_prompt(task_mode, summaries, selected_rules)
         synth_text, synth_meta = _generate_with_fallback(
             adapter,
             synth_prompt,
