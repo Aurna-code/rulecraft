@@ -139,3 +139,71 @@ def test_regpack_cli_writes_output(tmp_path: Path, capsys: pytest.CaptureFixture
     payload = json.loads(capsys.readouterr().out)
     assert payload["selected_total"] == 1
     assert out_path.exists()
+
+
+def test_regpack_counterexample_expansion_increases_output_and_caps_total(tmp_path: Path) -> None:
+    tasks_path = tmp_path / "tasks_expand.jsonl"
+    eventlog_path = tmp_path / "eventlog_expand.jsonl"
+    base_out = tmp_path / "regpack_base.jsonl"
+    expanded_out = tmp_path / "regpack_expand.jsonl"
+
+    _write_jsonl(
+        tasks_path,
+        [
+            {"task_id": "task-a0", "prompt": "Return JSON for alpha.", "mode": "json", "bucket_key": "alpha"},
+            {"task_id": "task-b0", "prompt": "Return JSON for beta.", "mode": "json", "bucket_key": "beta"},
+            {"task_id": "task-pass", "prompt": "One short sentence.", "mode": "text", "bucket_key": "beta"},
+        ],
+    )
+    _write_jsonl(
+        eventlog_path,
+        [
+            _event(
+                trace_id="ex-a0",
+                task_id="task-a0",
+                bucket_key="alpha",
+                verdict="FAIL",
+                outcome="FAIL",
+                pass_value=0,
+                failure_cluster_id="fc_parse",
+            ),
+            _event(
+                trace_id="ex-b0",
+                task_id="task-b0",
+                bucket_key="beta",
+                verdict="FAIL",
+                outcome="FAIL",
+                pass_value=0,
+                failure_cluster_id="fc_schema",
+            ),
+            _event(
+                trace_id="ex-pass",
+                task_id="task-pass",
+                bucket_key="beta",
+                verdict="PASS",
+                outcome="OK",
+                pass_value=1,
+            ),
+        ],
+    )
+
+    base_summary = build_regpack(tasks_path, eventlog_path, base_out, per_cluster=1, max_total=20)
+    expanded_summary = build_regpack(
+        tasks_path,
+        eventlog_path,
+        expanded_out,
+        per_cluster=1,
+        max_total=5,
+        expand_counterexamples=True,
+        counterexamples_per_cluster=2,
+        seed=1337,
+    )
+
+    base_rows = [json.loads(line) for line in base_out.read_text(encoding="utf-8").strip().splitlines()]
+    expanded_rows = [json.loads(line) for line in expanded_out.read_text(encoding="utf-8").strip().splitlines()]
+
+    assert expanded_summary["counterexamples_added"] > 0
+    assert expanded_summary["selected_total"] == len(expanded_rows)
+    assert expanded_summary["selected_total"] <= 5
+    assert len(expanded_rows) >= len(base_rows)
+    assert any("__ce_" in row["task_id"] for row in expanded_rows)

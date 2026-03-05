@@ -111,6 +111,14 @@ def _build_regpack_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", required=True, help="Output regpack JSONL path.")
     parser.add_argument("--per-cluster", type=int, default=2, help="Maximum unique tasks sampled per failure cluster.")
     parser.add_argument("--max-total", type=int, default=100, help="Hard cap on total sampled tasks.")
+    parser.add_argument("--expand-counterexamples", action="store_true", help="Include deterministic prompt mutations.")
+    parser.add_argument(
+        "--counterexamples-per-cluster",
+        type=int,
+        default=2,
+        help="Counterexamples generated for each sampled cluster task.",
+    )
+    parser.add_argument("--seed", type=int, default=1337, help="Deterministic seed for counterexample generation.")
     return parser
 
 
@@ -227,6 +235,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error("--per-cluster must be >= 1")
         if args.max_total < 1:
             parser.error("--max-total must be >= 1")
+        if args.counterexamples_per_cluster < 1:
+            parser.error("--counterexamples-per-cluster must be >= 1")
 
         summary = build_regpack(
             tasks_path=args.tasks,
@@ -234,7 +244,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             out_path=args.out,
             per_cluster=int(args.per_cluster),
             max_total=int(args.max_total),
+            expand_counterexamples=bool(args.expand_counterexamples),
+            counterexamples_per_cluster=int(args.counterexamples_per_cluster),
+            seed=int(args.seed),
         )
+        if args.expand_counterexamples:
+            print(f"Counterexamples added: {summary.get('counterexamples_added', 0)}", file=sys.stderr)
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
     if raw_argv and raw_argv[0] == "rule-suggest":

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ..contracts import normalize_eventlog_dict, pass_from
+from .counterexamples import generate_counterexamples
 
 
 def _extract_task_id(event: Mapping[str, Any]) -> str | None:
@@ -78,12 +79,17 @@ def build_regpack(
     out_path: str | Path,
     per_cluster: int = 2,
     max_total: int = 100,
+    expand_counterexamples: bool = False,
+    counterexamples_per_cluster: int = 2,
+    seed: int = 1337,
 ) -> dict[str, Any]:
     """Build a micro-regression task pack from failure clusters and pass canaries."""
     if int(per_cluster) < 1:
         raise ValueError("per_cluster must be >= 1")
     if int(max_total) < 1:
         raise ValueError("max_total must be >= 1")
+    if int(counterexamples_per_cluster) < 1:
+        raise ValueError("counterexamples_per_cluster must be >= 1")
 
     task_order, task_rows, task_buckets = _read_tasks(tasks_path)
     events = _iter_normalized_eventlog(eventlog_path)
@@ -148,18 +154,44 @@ def build_regpack(
             pass_bucket_added += 1
             break
 
+    selected_rows: list[dict[str, Any]] = [task_rows[task_id] for task_id in selected_ids]
+    counterexamples_added = 0
+    if expand_counterexamples and len(selected_rows) < max_total:
+        for cluster_id, _ in sorted(cluster_events.items(), key=lambda item: (-item[1], item[0])):
+            selected_for_cluster = cluster_selected.get(cluster_id, [])
+            if not selected_for_cluster:
+                continue
+            for task_id in selected_for_cluster:
+                if len(selected_rows) >= max_total:
+                    break
+                base_task = task_rows[task_id]
+                generated = generate_counterexamples(
+                    base_task,
+                    cluster_id=cluster_id,
+                    seed=int(seed),
+                    n=int(counterexamples_per_cluster),
+                )
+                for mutated_task in generated:
+                    if len(selected_rows) >= max_total:
+                        break
+                    selected_rows.append(mutated_task)
+                    counterexamples_added += 1
+            if len(selected_rows) >= max_total:
+                break
+
     target = Path(out_path)
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("w", encoding="utf-8") as fp:
-        for task_id in selected_ids:
-            fp.write(json.dumps(task_rows[task_id], ensure_ascii=False))
+        for row in selected_rows:
+            fp.write(json.dumps(row, ensure_ascii=False))
             fp.write("\n")
 
     return {
         "clusters_total": len(cluster_events),
         "clusters_sampled": sum(1 for task_ids in cluster_selected.values() if task_ids),
         "pass_bucket_samples": pass_bucket_added,
-        "selected_total": len(selected_ids),
+        "selected_total": len(selected_rows),
+        "counterexamples_added": counterexamples_added,
     }
 
 
