@@ -19,6 +19,7 @@ from .orchestrator import Orchestrator
 from .policy.profile import load_profile
 from .policy.suggest import suggest_policy
 from .runner.batch import run_batch
+from .runner.promote import run_promotion
 from .rulebook.store import RulebookStore
 from .verifier.cache import SqliteVerifierCache
 
@@ -109,6 +110,19 @@ def _build_regpack_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", required=True, help="Output regpack JSONL path.")
     parser.add_argument("--per-cluster", type=int, default=2, help="Maximum unique tasks sampled per failure cluster.")
     parser.add_argument("--max-total", type=int, default=100, help="Hard cap on total sampled tasks.")
+    return parser
+
+
+def _build_promote_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run baseline-vs-candidate promotion gate on a task pack.")
+    parser.add_argument("--tasks", required=True, help="Task JSONL path (typically regpack output).")
+    parser.add_argument("--adapter", choices=("stub", "openai"), default="stub", help="Adapter backend.")
+    parser.add_argument("--baseline-profile", required=True, help="Baseline policy profile JSON path.")
+    parser.add_argument("--candidate-profile", required=True, help="Candidate policy profile JSON path.")
+    parser.add_argument("--tmp-dir", default=".rulecraft", help="Directory for temporary promotion EventLog outputs.")
+    parser.add_argument("--seed", type=int, default=None, help="Optional seed metadata for reproducibility.")
+    parser.add_argument("--report", default=None, help="Optional output JSON report path.")
+    parser.add_argument("--fail-on-regression", action="store_true", help="Return exit code 1 on promotion regressions.")
     return parser
 
 
@@ -212,6 +226,41 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_total=int(args.max_total),
         )
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+    if raw_argv and raw_argv[0] == "promote":
+        parser = _build_promote_parser()
+        args = parser.parse_args(raw_argv[1:])
+
+        if args.adapter == "openai" and not os.getenv("OPENAI_API_KEY"):
+            print("OPENAI_API_KEY is not set. Skipping OpenAI promotion run.")
+            return 2
+
+        try:
+            baseline_profile = load_profile(args.baseline_profile)
+        except Exception as exc:  # pragma: no cover - parser error path
+            parser.error(f"failed to load baseline profile from {args.baseline_profile!r}: {exc}")
+
+        try:
+            candidate_profile = load_profile(args.candidate_profile)
+        except Exception as exc:  # pragma: no cover - parser error path
+            parser.error(f"failed to load candidate profile from {args.candidate_profile!r}: {exc}")
+
+        adapter = _build_batch_adapter(args.adapter)
+        report = run_promotion(
+            tasks_path=args.tasks,
+            adapter=adapter,
+            baseline_profile=baseline_profile,
+            candidate_profile=candidate_profile,
+            tmp_dir=args.tmp_dir,
+            seed=args.seed,
+        )
+        if args.report:
+            report_path = Path(args.report)
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+        if args.fail_on_regression and not bool(report.get("ok")):
+            return 1
         return 0
     if raw_argv and raw_argv[0] == "flowmap":
         parser = _build_flowmap_parser()

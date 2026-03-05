@@ -126,6 +126,55 @@ python -m rulecraft run-batch \
 
 Policy profiles support per-bucket overrides for `max_attempts`, scaling mode, rollout K values, synth toggle, and budgets. First matching rule wins.
 
+Suggest a conservative policy profile from EventLog analytics:
+
+```bash
+python -m rulecraft suggest-policy \
+  --path .rulecraft/eventlog.jsonl \
+  --out .rulecraft/suggested_policy_profile.json
+```
+
+The generated profile is conservative and bucket-aware:
+
+- Increase `max_attempts` when repair gain is high and repair cost is low.
+- Enable `scale=auto` when unknown outcomes are high but format leaks are low.
+- Cap or disable costly low-yield full rollout paths.
+- Keep synth enabled for schema-heavy failure buckets.
+
+## Regression Packs and Promotion Gates
+
+Build a micro-regression pack from failure clusters and pass-task canaries:
+
+```bash
+python -m rulecraft regpack \
+  --tasks examples/tasks/sample_tasks.jsonl \
+  --eventlog .rulecraft/eventlog.jsonl \
+  --out .rulecraft/regpack.jsonl \
+  --per-cluster 2 \
+  --max-total 100
+```
+
+Run promotion gate on baseline vs candidate policy profiles:
+
+```bash
+python -m rulecraft promote \
+  --tasks .rulecraft/regpack.jsonl \
+  --adapter stub \
+  --baseline-profile examples/policies/sample_policy_profile.json \
+  --candidate-profile .rulecraft/suggested_policy_profile.json \
+  --fail-on-regression \
+  --report .rulecraft/promotion_report.json
+```
+
+Promotion report highlights:
+
+- `deltas.task_pass_rate`: candidate minus baseline task pass rate.
+- `deltas.avg_attempts_per_task`: candidate minus baseline attempts per task.
+- `deltas.cost_usd_total`: candidate minus baseline total cost (when available).
+- `deltas.schema_violation_rate`: candidate minus baseline schema violation rate.
+- `regressions`: threshold violations that fail the gate when `--fail-on-regression` is set.
+- `warnings`: non-fatal degradations to inspect.
+
 ## Task Contracts and L3 Validation
 
 Task JSONL rows can include an optional `contract` object:
