@@ -12,6 +12,7 @@ from typing import Any, Sequence
 from .adapters.dummy import DummyAdapter
 from .adapters.openai_adapter import OpenAIAdapter
 from .adapters.stub import StubAdapter
+from .analysis.diff_runs import diff_runs
 from .analysis.flowmap import analyze_flowmap
 from .analysis.regpack import build_regpack
 from .metrics.eventlog_metrics import summarize_jsonl
@@ -189,6 +190,14 @@ def _build_replay_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Replay an evolve pipeline from a saved manifest.")
     parser.add_argument("--manifest", required=True, help="Path to evolve manifest JSON.")
     parser.add_argument("--outdir", default=None, help="Optional output directory for replay artifacts.")
+    return parser
+
+
+def _build_diff_runs_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Diff two evolve/replay runs from manifest files.")
+    parser.add_argument("--a", required=True, help="Manifest path for run A.")
+    parser.add_argument("--b", required=True, help="Manifest path for run B.")
+    parser.add_argument("--out", default=None, help="Optional output path for diff JSON.")
     return parser
 
 
@@ -536,6 +545,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         summary = run_replay(manifest_path=args.manifest, outdir=args.outdir)
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+    if raw_argv and raw_argv[0] == "diff-runs":
+        parser = _build_diff_runs_parser()
+        args = parser.parse_args(raw_argv[1:])
+        payload = diff_runs(args.a, args.b)
+        if args.out:
+            out_path = Path(args.out)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
     if raw_argv and raw_argv[0] == "flowmap":
         parser = _build_flowmap_parser()
