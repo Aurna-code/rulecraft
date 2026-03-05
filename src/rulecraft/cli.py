@@ -20,6 +20,7 @@ from .orchestrator import Orchestrator
 from .policy.profile import load_profile
 from .policy.suggest import suggest_policy
 from .runner.batch import run_batch
+from .runner.cleanup import cleanup_runs
 from .runner.evolve import run_evolve
 from .runner.manifest import load_manifest
 from .runner.promote import run_promotion
@@ -198,6 +199,18 @@ def _build_diff_runs_parser() -> argparse.ArgumentParser:
     parser.add_argument("--a", required=True, help="Manifest path for run A.")
     parser.add_argument("--b", required=True, help="Manifest path for run B.")
     parser.add_argument("--out", default=None, help="Optional output path for diff JSON.")
+    return parser
+
+
+def _build_cleanup_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Cleanup evolve/replay run artifacts by retention policy.")
+    parser.add_argument("--root", required=True, help="Root directory containing run folders.")
+    parser.add_argument("--keep-last", type=int, default=10, help="Number of most recent runs to retain.")
+    parser.add_argument("--keep-days", type=int, default=None, help="Also retain runs newer than this many days.")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true", help="Show cleanup plan without deleting files.")
+    mode.add_argument("--apply", action="store_true", help="Apply cleanup and delete candidate run directories.")
+    parser.set_defaults(dry_run=True, apply=False)
     return parser
 
 
@@ -555,6 +568,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+    if raw_argv and raw_argv[0] == "cleanup":
+        parser = _build_cleanup_parser()
+        args = parser.parse_args(raw_argv[1:])
+        if args.keep_last < 0:
+            parser.error("--keep-last must be >= 0")
+        if args.keep_days is not None and args.keep_days < 0:
+            parser.error("--keep-days must be >= 0")
+        summary = cleanup_runs(
+            root_dir=args.root,
+            keep_last=int(args.keep_last),
+            keep_days=int(args.keep_days) if args.keep_days is not None else None,
+            dry_run=not bool(args.apply),
+        )
+        print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
     if raw_argv and raw_argv[0] == "flowmap":
         parser = _build_flowmap_parser()
