@@ -13,11 +13,14 @@ from ..contracts import EventLog, pass_from
 from ..logging import append_event
 from ..policy.budget_router import BudgetState, should_attempt_repair
 from ..policy.repair_loop import build_repair_prompt
+from ..policy.should_scale import ScaleTier, escalate_to_full, should_scale
 from ..rulebook.select import RuleSelectRequest, select_rules
 from ..rulebook.store import RulebookStore
 from ..verifier import verify_text
+from .pacore_lite import run_pacore_lite
 
 TaskMode = Literal["text", "json"]
+ScaleMode = Literal["off", "auto", "probe", "full"]
 
 
 def _coerce_optional_int(value: object) -> int | None:
@@ -162,6 +165,53 @@ def _event_cost_usage(event_payload: Mapping[str, Any]) -> tuple[float, int]:
     return cost_usd, token_total
 
 
+def _event_is_pass(event_payload: Mapping[str, Any]) -> bool:
+    verifier = event_payload.get("verifier")
+    if isinstance(verifier, Mapping):
+        return pass_from(verifier) == 1
+    return False
+
+
+def _cost_meta_from_adapter(meta: Mapping[str, Any]) -> dict[str, Any]:
+    cost_meta = {
+        "backend": meta.get("backend", "unknown"),
+        "model": meta.get("model", meta.get("model_name", "unknown")),
+        "cost_usd": _coerce_optional_float(meta.get("cost_usd")),
+        "error": meta.get("error"),
+    }
+    if meta.get("response_id") is not None:
+        cost_meta["response_id"] = meta.get("response_id")
+    return cost_meta
+
+
+def _scale_budget_ok(state: BudgetState, last_event: Mapping[str, Any]) -> bool:
+    if state.budget_usd is not None and state.spent_usd >= state.budget_usd:
+        return False
+    if state.budget_tokens is not None and state.spent_tokens >= state.budget_tokens:
+        return False
+
+    projected_usd, projected_tokens = _event_cost_usage(last_event)
+    if state.budget_usd is not None and (state.spent_usd + projected_usd) > state.budget_usd:
+        return False
+    if state.budget_tokens is not None and (state.spent_tokens + projected_tokens) > state.budget_tokens:
+        return False
+    return True
+
+
+def _rollout_summary(scale_meta: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "tier": scale_meta.get("tier"),
+        "k": scale_meta.get("k"),
+        "top_m": scale_meta.get("top_m"),
+        "used_synth": bool(scale_meta.get("used_synth", False)),
+        "best_candidate_verdict": scale_meta.get("best_candidate_verdict"),
+        "best_candidate_outcome": scale_meta.get("best_candidate_outcome"),
+        "synth_verdict": scale_meta.get("synth_verdict"),
+        "synth_outcome": scale_meta.get("synth_outcome"),
+        "candidate_verdict_counts": scale_meta.get("candidate_verdict_counts", {}),
+    }
+
+
 def _iter_tasks(tasks_path: str | Path, limit: int | None) -> Iterator[dict[str, Any]]:
     path = Path(tasks_path)
     with path.open("r", encoding="utf-8") as fp:
@@ -260,7 +310,23 @@ def run_batch(
     budget_usd: float | None = None,
     budget_tokens: int | None = None,
     rulebook_store: RulebookStore | None = None,
+    scale: ScaleMode = "off",
+    k_probe: int = 3,
+    k_full: int = 8,
+    top_m: int = 2,
+    synth: bool = True,
 ) -> dict[str, int]:
+    scale_mode = str(scale).lower()
+    if scale_mode not in {"off", "auto", "probe", "full"}:
+        raise ValueError(f"Unsupported scale mode: {scale!r}")
+
+    if int(k_probe) < 1:
+        raise ValueError("k_probe must be >= 1")
+    if int(k_full) < 1:
+        raise ValueError("k_full must be >= 1")
+    if int(top_m) < 1:
+        raise ValueError("top_m must be >= 1")
+
     summary = {"total": 0, "passed": 0, "failed": 0, "unknown": 0}
     attempts_limit = max(int(max_attempts), 1) if repair else 1
 
@@ -283,6 +349,7 @@ def run_batch(
         attempt_prompt = primary_prompt
         attempt_instructions = instructions
         final_verifier_result = None
+        events_so_far: list[dict[str, Any]] = []
         budget_state = BudgetState(
             max_attempts=attempts_limit,
             attempts_used=0,
@@ -291,6 +358,66 @@ def run_batch(
             budget_tokens=budget_tokens,
             spent_tokens=0,
         )
+
+        def log_attempt_event(
+            *,
+            attempt_idx: int,
+            phase: str,
+            verifier_result: Any,
+            meta: Mapping[str, Any],
+            scale_meta: Mapping[str, Any] | None = None,
+            rollout: Mapping[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            run_extra: dict[str, Any] = {
+                "task_id": task_id,
+                "attempt_idx": attempt_idx,
+                "phase": phase,
+                "max_attempts": attempts_limit,
+            }
+            if scale_meta is not None:
+                run_extra["scale"] = dict(scale_meta)
+
+            outputs: dict[str, Any] = {"task_id": task_id}
+            if rollout is not None:
+                outputs["rollout"] = dict(rollout)
+
+            event = EventLog(
+                trace_id=trace_id,
+                x_ref=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+                bucket_key=task["bucket_key"],
+                flow_tags=task["flow_tags"],
+                selected_rules=selected_rule_refs,
+                run={
+                    "mode": "batch",
+                    "task_id": task_id,
+                    "extra": run_extra,
+                },
+                outputs=outputs,
+                verifier={
+                    "verifier_id": "vf_l1_v1",
+                    "verdict": verifier_result.verdict,
+                    "outcome": verifier_result.outcome,
+                    "reason_codes": verifier_result.reason_codes,
+                    "violated_constraints": verifier_result.violated_constraints,
+                    "pass": pass_from(verifier_result),
+                },
+                cost={
+                    "latency_ms": _coerce_optional_int(meta.get("latency_ms")),
+                    "tokens_in": _coerce_optional_int(meta.get("tokens_in")),
+                    "tokens_out": _coerce_optional_int(meta.get("tokens_out")),
+                    "tool_calls": _coerce_optional_int(meta.get("tool_calls")),
+                    "meta": _cost_meta_from_adapter(meta),
+                },
+            )
+            append_event(str(out_path), event)
+            payload = event.to_dict()
+            events_so_far.append(payload)
+
+            cost_usd_value, token_value = _event_cost_usage(payload)
+            budget_state.attempts_used += 1
+            budget_state.spent_usd += cost_usd_value
+            budget_state.spent_tokens += token_value
+            return payload
 
         while budget_state.attempts_used < budget_state.max_attempts:
             attempt_idx = budget_state.attempts_used
@@ -305,55 +432,12 @@ def run_batch(
             )
             verifier_result = verify_text(task_mode=mode, y=text)
             final_verifier_result = verifier_result
-
-            cost_meta = {
-                "backend": meta.get("backend", "unknown"),
-                "model": meta.get("model", meta.get("model_name", "unknown")),
-                "cost_usd": _coerce_optional_float(meta.get("cost_usd")),
-                "error": meta.get("error"),
-            }
-            if meta.get("response_id") is not None:
-                cost_meta["response_id"] = meta.get("response_id")
-
-            event = EventLog(
-                trace_id=trace_id,
-                x_ref=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
-                bucket_key=task["bucket_key"],
-                flow_tags=task["flow_tags"],
-                selected_rules=selected_rule_refs,
-                run={
-                    "mode": "batch",
-                    "task_id": task_id,
-                    "extra": {
-                        "task_id": task_id,
-                        "attempt_idx": attempt_idx,
-                        "phase": phase,
-                        "max_attempts": attempts_limit,
-                    },
-                },
-                outputs={"task_id": task_id},
-                verifier={
-                    "verifier_id": "vf_l1_v1",
-                    "verdict": verifier_result.verdict,
-                    "outcome": verifier_result.outcome,
-                    "reason_codes": verifier_result.reason_codes,
-                    "violated_constraints": verifier_result.violated_constraints,
-                    "pass": pass_from(verifier_result),
-                },
-                cost={
-                    "latency_ms": _coerce_optional_int(meta.get("latency_ms")),
-                    "tokens_in": _coerce_optional_int(meta.get("tokens_in")),
-                    "tokens_out": _coerce_optional_int(meta.get("tokens_out")),
-                    "tool_calls": _coerce_optional_int(meta.get("tool_calls")),
-                    "meta": cost_meta,
-                },
+            event_payload = log_attempt_event(
+                attempt_idx=attempt_idx,
+                phase=phase,
+                verifier_result=verifier_result,
+                meta=meta,
             )
-            append_event(str(out_path), event)
-            event_payload = event.to_dict()
-            cost_usd_value, token_value = _event_cost_usage(event_payload)
-            budget_state.attempts_used += 1
-            budget_state.spent_usd += cost_usd_value
-            budget_state.spent_tokens += token_value
 
             if verifier_result.verdict == "PASS" and verifier_result.outcome != "FAIL":
                 break
@@ -379,6 +463,110 @@ def run_batch(
                 attempt_instructions = f"{instructions}\n{repair_instructions}"
             else:
                 attempt_instructions = repair_instructions or instructions
+
+        task_passed = final_verifier_result is not None and (
+            final_verifier_result.verdict == "PASS" and final_verifier_result.outcome != "FAIL"
+        )
+        if not task_passed and scale_mode != "off":
+            tier: ScaleTier
+            if scale_mode in {"probe", "full"}:
+                tier = scale_mode
+            else:
+                tier = should_scale(events_so_far, mode)
+
+            if tier == "probe":
+                probe_attempt_idx = budget_state.attempts_used
+                probe_text, probe_meta = run_pacore_lite(
+                    primary_prompt,
+                    mode,
+                    adapter,
+                    k=int(k_probe),
+                    top_m=int(top_m),
+                    use_synth=bool(synth),
+                    instructions=instructions,
+                    selected_rules=selected_rules,
+                    tier="probe",
+                    task_id=task_id,
+                    attempt_idx=probe_attempt_idx,
+                )
+                probe_verifier = verify_text(task_mode=mode, y=probe_text)
+                final_verifier_result = probe_verifier
+
+                probe_scale_meta = _rollout_summary(probe_meta)
+                probe_meta_for_event = probe_meta.get("event_meta")
+                if not isinstance(probe_meta_for_event, Mapping):
+                    probe_meta_for_event = {}
+                probe_event = log_attempt_event(
+                    attempt_idx=probe_attempt_idx,
+                    phase="scale_probe",
+                    verifier_result=probe_verifier,
+                    meta=probe_meta_for_event,
+                    scale_meta=probe_scale_meta,
+                    rollout=probe_scale_meta,
+                )
+
+                if escalate_to_full(dict(probe_event), budget_ok=_scale_budget_ok(budget_state, probe_event)):
+                    full_attempt_idx = budget_state.attempts_used
+                    full_text, full_meta = run_pacore_lite(
+                        primary_prompt,
+                        mode,
+                        adapter,
+                        k=int(k_full),
+                        top_m=int(top_m),
+                        use_synth=bool(synth),
+                        instructions=instructions,
+                        selected_rules=selected_rules,
+                        tier="full",
+                        task_id=task_id,
+                        attempt_idx=full_attempt_idx,
+                    )
+                    full_verifier = verify_text(task_mode=mode, y=full_text)
+                    final_verifier_result = full_verifier
+
+                    full_scale_meta = _rollout_summary(full_meta)
+                    full_meta_for_event = full_meta.get("event_meta")
+                    if not isinstance(full_meta_for_event, Mapping):
+                        full_meta_for_event = {}
+                    log_attempt_event(
+                        attempt_idx=full_attempt_idx,
+                        phase="scale_full",
+                        verifier_result=full_verifier,
+                        meta=full_meta_for_event,
+                        scale_meta=full_scale_meta,
+                        rollout=full_scale_meta,
+                    )
+            elif tier == "full":
+                can_run_full = not events_so_far or _scale_budget_ok(budget_state, events_so_far[-1])
+                if can_run_full:
+                    full_attempt_idx = budget_state.attempts_used
+                    full_text, full_meta = run_pacore_lite(
+                        primary_prompt,
+                        mode,
+                        adapter,
+                        k=int(k_full),
+                        top_m=int(top_m),
+                        use_synth=bool(synth),
+                        instructions=instructions,
+                        selected_rules=selected_rules,
+                        tier="full",
+                        task_id=task_id,
+                        attempt_idx=full_attempt_idx,
+                    )
+                    full_verifier = verify_text(task_mode=mode, y=full_text)
+                    final_verifier_result = full_verifier
+
+                    full_scale_meta = _rollout_summary(full_meta)
+                    full_meta_for_event = full_meta.get("event_meta")
+                    if not isinstance(full_meta_for_event, Mapping):
+                        full_meta_for_event = {}
+                    log_attempt_event(
+                        attempt_idx=full_attempt_idx,
+                        phase="scale_full",
+                        verifier_result=full_verifier,
+                        meta=full_meta_for_event,
+                        scale_meta=full_scale_meta,
+                        rollout=full_scale_meta,
+                    )
 
         summary["total"] += 1
         if final_verifier_result is None:
