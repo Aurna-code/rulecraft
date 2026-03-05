@@ -20,6 +20,7 @@ from .policy.profile import load_profile
 from .policy.suggest import suggest_policy
 from .runner.batch import run_batch
 from .runner.promote import run_promotion
+from .rulebook.suggest import suggest_rules
 from .rulebook.store import RulebookStore
 from .verifier.cache import SqliteVerifierCache
 
@@ -110,6 +111,15 @@ def _build_regpack_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", required=True, help="Output regpack JSONL path.")
     parser.add_argument("--per-cluster", type=int, default=2, help="Maximum unique tasks sampled per failure cluster.")
     parser.add_argument("--max-total", type=int, default=100, help="Hard cap on total sampled tasks.")
+    return parser
+
+
+def _build_rule_suggest_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Suggest conservative rulebook entries from failure clusters.")
+    parser.add_argument("--tasks", required=True, help="Tasks JSONL path.")
+    parser.add_argument("--eventlog", required=True, help="EventLog JSONL path.")
+    parser.add_argument("--out", required=True, help="Output rulebook JSON path.")
+    parser.add_argument("--max-rules", type=int, default=20, help="Maximum suggested rules.")
     return parser
 
 
@@ -226,6 +236,38 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_total=int(args.max_total),
         )
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+    if raw_argv and raw_argv[0] == "rule-suggest":
+        parser = _build_rule_suggest_parser()
+        args = parser.parse_args(raw_argv[1:])
+        if args.max_rules < 1:
+            parser.error("--max-rules must be >= 1")
+
+        payload = suggest_rules(
+            tasks_path=args.tasks,
+            eventlog_path=args.eventlog,
+            max_rules=int(args.max_rules),
+        )
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        summary = payload.get("suggestion_summary")
+        if isinstance(summary, dict):
+            template_counts = summary.get("templates")
+            if isinstance(template_counts, dict):
+                top_templates = ", ".join(
+                    f"{name}:{count}"
+                    for name, count in sorted(template_counts.items(), key=lambda item: (-int(item[1]), str(item[0])))[:3]
+                )
+            else:
+                top_templates = "none"
+            print(
+                f"Suggested {summary.get('rules_total', 0)} rule(s) from {summary.get('clusters_total', 0)} cluster(s). "
+                f"Top templates: {top_templates}",
+                file=sys.stderr,
+            )
+        else:
+            print("Suggested rules written.", file=sys.stderr)
         return 0
     if raw_argv and raw_argv[0] == "promote":
         parser = _build_promote_parser()
