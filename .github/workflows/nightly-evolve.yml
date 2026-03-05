@@ -1,0 +1,35 @@
+name: Nightly Evolve
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  evolve-stub:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e ".[dev]"
+      - name: Run Evolve (stub)
+        run: |
+          python -m rulecraft evolve \
+            --tasks examples/tasks/evolve_smoke_tasks.jsonl \
+            --adapter stub \
+            --outdir .rulecraft/evolve/nightly
+      - name: Upload Evolve Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-evolve-artifacts
+          if-no-files-found: error
+          path: |
+            .rulecraft/evolve/nightly/manifest.json
+            .rulecraft/evolve/nightly/summary.json
+            .rulecraft/evolve/nightly/policy_promote_report.json
+            .rulecraft/evolve/nightly/rules_promote_report.json

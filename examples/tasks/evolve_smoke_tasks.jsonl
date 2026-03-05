@@ -1,0 +1,3 @@
+{"task_id":"evolve-json-status","prompt":"Return a JSON object with key status set to ok.","mode":"json","bucket_key":"support","flow_tags":["evolve","json"]}
+{"task_id":"evolve-json-id","prompt":"Return a JSON object with key id and a short string value.","mode":"json","bucket_key":"support","flow_tags":["evolve","json"]}
+{"task_id":"evolve-text-summary","prompt":"Summarize this request in one short sentence.","mode":"text","bucket_key":"support","flow_tags":["evolve","text"]}

@@ -255,6 +255,48 @@ Rule gate report highlights:
 - `rule_impact.*.unused_rules`: rule IDs that were never selected in the corresponding run.
 - `regressions`: hard threshold failures (with `--fail-on-regression`, CLI returns exit code `3`).
 
+## End-to-End Evolution and Replay
+
+Run the full baseline -> suggest -> regpack -> promote pipeline and write artifacts into one run directory:
+
+```bash
+python -m rulecraft evolve \
+  --tasks examples/tasks/evolve_smoke_tasks.jsonl \
+  --adapter stub \
+  --outdir .rulecraft/evolve/run1
+```
+
+`evolve` writes:
+
+- `.rulecraft/evolve/run1/manifest.json`
+- `.rulecraft/evolve/run1/baseline.jsonl`
+- `.rulecraft/evolve/run1/metrics.json`
+- `.rulecraft/evolve/run1/flowmap.json`
+- `.rulecraft/evolve/run1/candidate_policy.json`
+- `.rulecraft/evolve/run1/candidate_rulebook.json`
+- `.rulecraft/evolve/run1/regpack.jsonl`
+- `.rulecraft/evolve/run1/policy_promote_report.json`
+- `.rulecraft/evolve/run1/rules_promote_report.json`
+- `.rulecraft/evolve/run1/summary.json`
+
+Replay the same run from its manifest:
+
+```bash
+python -m rulecraft replay --manifest .rulecraft/evolve/run1/manifest.json
+```
+
+By default replay writes to `.rulecraft/evolve/run1/replay`. Override with `--outdir` when needed.
+
+How to read `summary.json`:
+
+- `ok`: overall gate result (`policy` and `rules` both passed).
+- `gates.policy.ok`, `gates.rules.ok`: per-gate pass/fail.
+- `key_deltas.task_pass_rate`, `strong_pass_rate`, `schema_violation_rate`, `cost_usd_total`: key candidate-vs-baseline deltas.
+- `top_clusters.improved`, `top_clusters.worsened`: highest-impact cluster movements from the rule gate report.
+- `files_written`: resolved file paths for generated artifacts.
+
+The repository includes an optional nightly stub workflow at `.github/workflows/nightly-evolve.yml` that runs `evolve` with `--adapter stub` and uploads summary reports. OpenAI adapter runs are not used in CI by default.
+
 ## Task Contracts and L3 Validation
 
 Task JSONL rows can include an optional `contract` object:
