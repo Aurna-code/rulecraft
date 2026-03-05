@@ -6,6 +6,7 @@ import json
 from collections import Counter
 from typing import Any, Literal, Mapping
 
+from ..verifier.cache import VerifierCache
 from ..verifier.verify_output import verify_output
 from .rollout_rank import rank_candidates
 
@@ -203,6 +204,7 @@ def run_pacore_lite(
     instructions: str | None,
     selected_rules: list[object],
     contract: Mapping[str, Any] | None = None,
+    verifier_cache: VerifierCache | None = None,
     *,
     tier: str | None = None,
     task_id: str | None = None,
@@ -233,7 +235,7 @@ def run_pacore_lite(
         )
         call_metas.append(meta)
 
-        verifier = verify_output(mode=task_mode, y_text=text, contract=contract)
+        verifier = verify_output(mode=task_mode, y_text=text, contract=contract, cache=verifier_cache)
         candidates.append(
             {
                 "y": text,
@@ -280,7 +282,7 @@ def run_pacore_lite(
         )
         call_metas.append(synth_meta)
 
-        synth_verifier = verify_output(mode=task_mode, y_text=synth_text, contract=contract)
+        synth_verifier = verify_output(mode=task_mode, y_text=synth_text, contract=contract, cache=verifier_cache)
         synth_verdict = str(synth_verifier.get("verdict"))
         synth_outcome = str(synth_verifier.get("outcome"))
 

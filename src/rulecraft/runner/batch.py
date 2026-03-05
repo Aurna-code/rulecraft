@@ -16,6 +16,7 @@ from ..policy.repair_loop import build_repair_prompt
 from ..policy.should_scale import ScaleTier, escalate_to_full, should_scale
 from ..rulebook.select import RuleSelectRequest, select_rules
 from ..rulebook.store import RulebookStore
+from ..verifier.cache import VerifierCache
 from ..verifier.verify_output import verify_output
 from .pacore_lite import run_pacore_lite
 
@@ -375,6 +376,7 @@ def run_batch(
     k_full: int = 8,
     top_m: int = 2,
     synth: bool = True,
+    verifier_cache: VerifierCache | None = None,
 ) -> dict[str, int]:
     scale_mode = str(scale).lower()
     if scale_mode not in {"off", "auto", "probe", "full"}:
@@ -433,6 +435,7 @@ def run_batch(
             meta: Mapping[str, Any],
             scale_meta: Mapping[str, Any] | None = None,
             rollout: Mapping[str, Any] | None = None,
+            verifier_cache_hit: bool = False,
         ) -> dict[str, Any]:
             run_extra: dict[str, Any] = {
                 "task_id": task_id,
@@ -440,6 +443,8 @@ def run_batch(
                 "phase": phase,
                 "max_attempts": attempts_limit,
             }
+            if verifier_cache_hit:
+                run_extra["verifier_cache_hit"] = True
             if contract_summary is not None:
                 run_extra["contract"] = dict(contract_summary)
             if scale_meta is not None:
@@ -491,13 +496,21 @@ def run_batch(
                 attempt_idx=attempt_idx,
                 phase=phase,
             )
-            verifier_result = verify_output(mode=mode, y_text=text, contract=normalized_contract)
+            verifier_meta: dict[str, Any] = {}
+            verifier_result = verify_output(
+                mode=mode,
+                y_text=text,
+                contract=normalized_contract,
+                cache=verifier_cache,
+                meta_out=verifier_meta,
+            )
             final_verifier_result = verifier_result
             event_payload = log_attempt_event(
                 attempt_idx=attempt_idx,
                 phase=phase,
                 verifier_result=verifier_result,
                 meta=meta,
+                verifier_cache_hit=bool(verifier_meta.get("cache_hit", False)),
             )
 
             if _verifier_is_pass(verifier_result):
@@ -545,11 +558,19 @@ def run_batch(
                     instructions=instructions,
                     selected_rules=selected_rules,
                     contract=normalized_contract,
+                    verifier_cache=verifier_cache,
                     tier="probe",
                     task_id=task_id,
                     attempt_idx=probe_attempt_idx,
                 )
-                probe_verifier = verify_output(mode=mode, y_text=probe_text, contract=normalized_contract)
+                probe_verifier_meta: dict[str, Any] = {}
+                probe_verifier = verify_output(
+                    mode=mode,
+                    y_text=probe_text,
+                    contract=normalized_contract,
+                    cache=verifier_cache,
+                    meta_out=probe_verifier_meta,
+                )
                 final_verifier_result = probe_verifier
 
                 probe_scale_meta = _rollout_summary(probe_meta)
@@ -563,6 +584,7 @@ def run_batch(
                     meta=probe_meta_for_event,
                     scale_meta=probe_scale_meta,
                     rollout=probe_scale_meta,
+                    verifier_cache_hit=bool(probe_verifier_meta.get("cache_hit", False)),
                 )
 
                 budget_ok_for_full = _scale_budget_ok(budget_state, probe_event)
@@ -588,11 +610,19 @@ def run_batch(
                         instructions=instructions,
                         selected_rules=selected_rules,
                         contract=normalized_contract,
+                        verifier_cache=verifier_cache,
                         tier="full",
                         task_id=task_id,
                         attempt_idx=full_attempt_idx,
                     )
-                    full_verifier = verify_output(mode=mode, y_text=full_text, contract=normalized_contract)
+                    full_verifier_meta: dict[str, Any] = {}
+                    full_verifier = verify_output(
+                        mode=mode,
+                        y_text=full_text,
+                        contract=normalized_contract,
+                        cache=verifier_cache,
+                        meta_out=full_verifier_meta,
+                    )
                     final_verifier_result = full_verifier
 
                     full_scale_meta = _rollout_summary(full_meta)
@@ -606,6 +636,7 @@ def run_batch(
                         meta=full_meta_for_event,
                         scale_meta=full_scale_meta,
                         rollout=full_scale_meta,
+                        verifier_cache_hit=bool(full_verifier_meta.get("cache_hit", False)),
                     )
             elif tier == "full":
                 can_run_full = not events_so_far or _scale_budget_ok(budget_state, events_so_far[-1])
@@ -621,11 +652,19 @@ def run_batch(
                         instructions=instructions,
                         selected_rules=selected_rules,
                         contract=normalized_contract,
+                        verifier_cache=verifier_cache,
                         tier="full",
                         task_id=task_id,
                         attempt_idx=full_attempt_idx,
                     )
-                    full_verifier = verify_output(mode=mode, y_text=full_text, contract=normalized_contract)
+                    full_verifier_meta: dict[str, Any] = {}
+                    full_verifier = verify_output(
+                        mode=mode,
+                        y_text=full_text,
+                        contract=normalized_contract,
+                        cache=verifier_cache,
+                        meta_out=full_verifier_meta,
+                    )
                     final_verifier_result = full_verifier
 
                     full_scale_meta = _rollout_summary(full_meta)
@@ -639,6 +678,7 @@ def run_batch(
                         meta=full_meta_for_event,
                         scale_meta=full_scale_meta,
                         rollout=full_scale_meta,
+                        verifier_cache_hit=bool(full_verifier_meta.get("cache_hit", False)),
                     )
 
         summary["total"] += 1

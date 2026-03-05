@@ -164,7 +164,18 @@ def test_probe_pass_unknown_escalates_to_full_when_budget_allows(
 
     original_verify_output = batch_runner.verify_output
 
-    def _verify_output_with_weak_probe(mode: str, y_text: str, contract: dict[str, object] | None) -> dict[str, object]:
+    def _verify_output_with_weak_probe(
+        mode: str,
+        y_text: str,
+        contract: dict[str, object] | None,
+        *,
+        cache: object | None = None,
+        meta_out: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        del cache
+        if meta_out is not None:
+            meta_out["cache_hit"] = False
+            meta_out["y_ref"] = "probe-test"
         if y_text == "probe-weak-pass":
             return {
                 "verifier_id": "vf_test",
@@ -185,7 +196,7 @@ def test_probe_pass_unknown_escalates_to_full_when_budget_allows(
                 "pass": 1,
                 "layers": {"l1": {"verdict": "PASS", "outcome": "OK", "reason_codes": None, "violated_constraints": None}},
             }
-        return original_verify_output(mode=mode, y_text=y_text, contract=contract)
+        return original_verify_output(mode=mode, y_text=y_text, contract=contract, cache=None, meta_out=meta_out)
 
     monkeypatch.setattr(batch_runner, "verify_output", _verify_output_with_weak_probe)
 

@@ -15,6 +15,7 @@ from .metrics.eventlog_metrics import summarize_jsonl
 from .orchestrator import Orchestrator
 from .runner.batch import run_batch
 from .rulebook.store import RulebookStore
+from .verifier.cache import SqliteVerifierCache
 
 
 def _preview(text: str, limit: int = 120) -> str:
@@ -76,6 +77,7 @@ def _build_run_batch_parser() -> argparse.ArgumentParser:
     parser.add_argument("--k-full", type=int, default=8, help="Number of candidates for full rollout.")
     parser.add_argument("--top-m", type=int, default=2, help="How many top candidates to keep before synth.")
     parser.add_argument("--no-synth", action="store_true", help="Disable synth step and return best ranked candidate.")
+    parser.add_argument("--verifier-cache", default=None, help="Optional sqlite path for verifier result cache.")
     return parser
 
 
@@ -123,6 +125,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 parser.error(f"failed to load Rulebook from {args.rulebook!r}: {exc}")
 
         adapter = _build_batch_adapter(args.adapter)
+        verifier_cache = SqliteVerifierCache(args.verifier_cache) if args.verifier_cache else None
         summary = run_batch(
             tasks_path=args.tasks,
             adapter=adapter,
@@ -139,6 +142,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             k_full=int(args.k_full),
             top_m=int(args.top_m),
             synth=not bool(args.no_synth),
+            verifier_cache=verifier_cache,
         )
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
         return 0

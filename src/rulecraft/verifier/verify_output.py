@@ -7,6 +7,8 @@ import json
 from typing import Any, Mapping
 
 from ..contracts import VerifierResult, pass_from
+from ..contracts.ssot import SCHEMA_VERSION
+from .cache import VerifierCache, make_cache_key
 from .l1 import verify_text
 from .l3_jsonschema import verify_jsonschema
 from .taxonomy import EXEC_UNAVAILABLE, normalize_codes, vc_jsonschema
@@ -45,8 +47,42 @@ def _failure_cluster_id(
     return f"fc_{digest[:12]}"
 
 
-def verify_output(mode: str, y_text: str, contract: Mapping[str, Any] | None) -> dict[str, Any]:
+def verify_output(
+    mode: str,
+    y_text: str,
+    contract: Mapping[str, Any] | None,
+    *,
+    cache: VerifierCache | None = None,
+    meta_out: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Run L1 and optional L3 verification and return canonical verifier payload."""
+    y_ref = hashlib.sha256(y_text.encode("utf-8")).hexdigest()
+    verifier_id_profile = (
+        "vf_l1_l3_jsonschema_v1"
+        if mode == "json" and isinstance(contract, Mapping) and contract.get("type") == "jsonschema"
+        else "vf_l1_v1"
+    )
+    if isinstance(contract, Mapping):
+        raw_contract_id = contract.get("schema_id")
+        contract_id = str(raw_contract_id) if isinstance(raw_contract_id, str) and raw_contract_id else None
+    else:
+        contract_id = None
+
+    cache_key = make_cache_key(
+        schema_version=SCHEMA_VERSION,
+        verifier_id=verifier_id_profile,
+        mode=mode,
+        contract_id=contract_id,
+        y_ref=y_ref,
+    )
+    if cache is not None:
+        cached_value = cache.get(cache_key)
+        if isinstance(cached_value, dict):
+            if meta_out is not None:
+                meta_out["cache_hit"] = True
+                meta_out["y_ref"] = y_ref
+            return dict(cached_value)
+
     l1_result = verify_text(task_mode="json" if mode == "json" else "text", y=y_text)
     layers: dict[str, Any] = {"l1": _layer_payload(l1_result)}
 
@@ -82,7 +118,8 @@ def verify_output(mode: str, y_text: str, contract: Mapping[str, Any] | None) ->
         )
     else:
         failure_cluster_id = None
-    return {
+    layers["meta"] = {"y_ref": y_ref}
+    result = {
         "verifier_id": verifier_id,
         "verdict": overall.verdict,
         "outcome": overall.outcome,
@@ -92,6 +129,12 @@ def verify_output(mode: str, y_text: str, contract: Mapping[str, Any] | None) ->
         "failure_cluster_id": failure_cluster_id,
         "layers": layers,
     }
+    if cache is not None:
+        cache.set(cache_key, result)
+    if meta_out is not None:
+        meta_out["cache_hit"] = False
+        meta_out["y_ref"] = y_ref
+    return result
 
 
 __all__ = ["verify_output"]
